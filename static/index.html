@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Character Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- 上部ステータス。LLM 接続状態とモデル名を固定表示する。 -->
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">DAY2 WEB APP</p>
+        <h1>AIキャラ会話</h1>
+      </div>
+      <div class="status-group">
+        <span id="server-status" class="status-badge status-loading">接続確認中</span>
+        <span id="model-name" class="model-name">model: -</span>
+      </div>
+    </header>
+
+    <main class="layout" id="layout-root">
+      <!-- 左カラム。キャラ設定と会話制御をまとめた常設パネル。 -->
+      <aside class="character-panel" id="character-panel">
+        <div class="character-visual" id="character-visual">
+          <span id="character-avatar-label">も</span>
+        </div>
+        <div class="character-body">
+          <label class="field-label" for="character-select">キャラクター</label>
+          <select id="character-select"></select>
+          <div class="character-editor-toolbar">
+            <button id="create-character-button" class="secondary-button" type="button">新規登録</button>
+            <button id="asset-editor-toggle-button" class="secondary-button" type="button">素材登録</button>
+            <button id="delete-character-button" class="danger-button" type="button">このキャラを削除</button>
+          </div>
+          <h2 id="character-name">-</h2>
+          <p id="character-description" class="character-description"></p>
+          <div class="editor-grid">
+            <div>
+              <label class="field-label" for="character-id-input">キャラクタ登録名</label>
+              <input id="character-id-input" type="text" placeholder="momo" pattern="[a-z0-9][a-z0-9_-]*" spellcheck="false">
+              <p class="field-note">作成モードでは role に書いた名前を LLM でローマ字化して候補を入れます。保存ファイル名にも使うので、英小文字、数字、-、_ で保存されます。</p>
+            </div>
+            <div>
+              <label class="field-label" for="character-display-name-input">表示名</label>
+              <input id="character-display-name-input" type="text" placeholder="もも">
+            </div>
+            <div>
+              <label class="field-label" for="character-name-input">内部名</label>
+              <input id="character-name-input" type="text" placeholder="もも">
+            </div>
+            <div>
+              <label class="field-label" for="character-voice-name-input">TTS表示名</label>
+              <input id="character-voice-name-input" type="text" placeholder="もも">
+            </div>
+            <div class="editor-grid-full">
+              <label class="field-label" for="audio-enabled-toggle">音声ストリーミング</label>
+              <label class="toggle-field" for="audio-enabled-toggle">
+                <input type="checkbox" id="audio-enabled-toggle">
+                <span id="audio-enabled-label">TTS未接続</span>
+              </label>
+            </div>
+            <div>
+              <label class="field-label" for="character-theme-color-input">テーマ色</label>
+              <input id="character-theme-color-input" type="color" value="#f26f63">
+            </div>
+            <div>
+              <label class="field-label" for="character-accent-color-input">アクセント色</label>
+              <input id="character-accent-color-input" type="color" value="#1f7a8c">
+            </div>
+          </div>
+
+          <label class="field-label" for="character-description-input">説明</label>
+          <textarea id="character-description-input" rows="3" placeholder="キャラクターの短い説明"></textarea>
+
+          <label class="field-label" for="character-greeting-input">初回あいさつ</label>
+          <textarea id="character-greeting-input" rows="2" placeholder="こんにちは、今日は何を話す？"></textarea>
+
+          <label class="field-label" for="character-tags-input">タグ</label>
+          <input id="character-tags-input" type="text" placeholder="大阪弁, ロボット, 元気">
+
+          <label class="checkbox-field" for="character-default-input">
+            <input id="character-default-input" type="checkbox">
+            <span>既定キャラにする</span>
+          </label>
+
+          <dl class="character-meta">
+            <div>
+              <dt>会話ターン記憶数</dt>
+              <dd>
+                <input type="number" id="history-count-input" min="0" max="20" value="10" placeholder="0-20">
+              </dd>
+            </div>
+            <div>
+              <dt>要約開始文字数</dt>
+              <dd>
+                <input type="number" id="summary-threshold-input" min="0" max="4000" value="150" placeholder="0-4000">
+              </dd>
+            </div>
+            <div>
+              <dt>要約文字数</dt>
+              <dd>
+                <input type="number" id="summary-max-chars-input" min="1" max="2000" value="100" placeholder="1-2000">
+              </dd>
+            </div>
+            <div>
+              <dt>TTS区切り</dt>
+              <dd>
+                <label class="checkbox-field" for="tts-split-on-soft-boundaries-toggle">
+                  <input type="checkbox" id="tts-split-on-soft-boundaries-toggle">
+                  <span id="tts-split-on-soft-boundaries-label">読点でも短く区切る</span>
+                </label>
+              </dd>
+            </div>
+            <div id="lipsync-toggle-row" class="hidden">
+              <dt>リップシンク</dt>
+              <dd>
+                <label class="toggle-field" for="lipsync-enabled-toggle">
+                  <input type="checkbox" id="lipsync-enabled-toggle" checked>
+                  <span id="lipsync-enabled-label">口パク素材を確認中</span>
+                </label>
+              </dd>
+            </div>
+          </dl>
+          <p class="field-note">要約開始文字数を 0 にすると、履歴用の要約を無効にできます。TTS 区切りを ON にすると、句点を待たずに「、」などでも短く読み上げます。</p>
+
+          <section class="integration-panel">
+            <div class="integration-panel-header">
+              <h3>YouTube コメント</h3>
+              <label class="toggle-field" for="youtube-enabled-toggle">
+                <input type="checkbox" id="youtube-enabled-toggle">
+                <span id="youtube-enabled-label">取得しない</span>
+              </label>
+            </div>
+            <label class="field-label" for="youtube-video-id-input">配信 URL または videoId</label>
+            <input id="youtube-video-id-input" type="text" placeholder="https://www.youtube.com/watch?v=... または dQw4w9WgXcQ">
+            <label class="checkbox-field" for="youtube-auto-send-toggle">
+              <input id="youtube-auto-send-toggle" type="checkbox" checked>
+              <span>新着コメントを自動送信する</span>
+            </label>
+            <div class="integration-actions">
+              <button id="youtube-start-button" class="secondary-button" type="button">取得開始</button>
+              <button id="youtube-stop-button" class="secondary-button" type="button">停止</button>
+            </div>
+            <p id="youtube-status-text" class="field-note">YouTube コメント取得は停止中です。</p>
+          </section>
+
+          <!-- TTS の現在状態と、取得済みボイス一覧を確認するための情報枠。 -->
+          <div class="tts-panel">
+            <label class="field-label" for="tts-voice-summary">現在のTTSボイス</label>
+            <div id="tts-voice-summary" class="tts-summary">確認中</div>
+            <label class="field-label" for="tts-voice-select">読み上げボイスを選ぶ</label>
+            <select id="tts-voice-select"></select>
+            <details class="tts-inspector">
+              <summary>利用可能なボイスとモデル</summary>
+              <div class="tts-inspector-body">
+                <div>
+                  <p class="tts-section-title">話者 / スタイル</p>
+                  <ul id="tts-voice-list" class="tts-list"></ul>
+                </div>
+                <div>
+                  <p class="tts-section-title">音声モデル</p>
+                  <ul id="tts-model-list" class="tts-list"></ul>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <label class="field-label" for="role-text">キャラクタロール</label>
+          <textarea id="role-text" rows="12" placeholder="キャラクター設定や口調を入力"></textarea>
+
+          <details id="asset-editor" class="asset-editor">
+            <summary class="asset-editor-summary hidden">素材登録</summary>
+            <div>
+              <label class="field-label" for="visual-type-select">メイン表示タイプ</label>
+              <select id="visual-type-select">
+                <option value="image">image</option>
+                <option value="video">video</option>
+                <option value="none">none</option>
+              </select>
+            </div>
+            <p class="asset-editor-note">メイン・会話・待機の登録先を選んでから、左上のキャラクター表示へドロップして登録します。必要な hidden 値は内部で保持されます。</p>
+            <div class="asset-upload-inputs-hidden" aria-hidden="true">
+              <input id="visual-path-input" type="hidden">
+              <input id="visual-upload-input" class="asset-upload-input-hidden" type="file" accept="image/*,video/*" tabindex="-1">
+              <input id="talking-visual-path-input" type="hidden">
+              <input id="talking-upload-input" class="asset-upload-input-hidden" type="file" accept="video/*,image/*" tabindex="-1">
+              <input id="waiting-visual-path-input" type="hidden">
+              <input id="waiting-upload-input" class="asset-upload-input-hidden" type="file" accept="video/*,image/*" tabindex="-1">
+            </div>
+          </details>
+        </div>
+        <div class="panel-actions">
+          <button id="save-character-button" class="secondary-button" type="button">キャラ設定を保存</button>
+          <button id="new-conversation-button" class="secondary-button" type="button">新しい会話</button>
+          <button id="clear-conversation-button" class="secondary-button" type="button">履歴クリア</button>
+        </div>
+      </aside>
+
+      <!-- 右カラム。拡大メディア、会話ログ、送信フォームを積む。 -->
+      <section class="chat-panel" id="chat-panel">
+        <!-- 拡大表示時だけ使うステージ。ボタンは残し、中身だけ差し替える。 -->
+        <div id="chat-visual-stage" class="chat-visual-stage hidden" aria-live="polite">
+          <button id="chat-visual-close" class="chat-visual-close" type="button" aria-label="拡大表示を閉じる">×</button>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="error-banner" class="error-banner hidden"></div>
+        <form id="composer" class="composer">
+          <textarea id="message-input" rows="3" placeholder="ももに話しかけてください"></textarea>
+          <button id="send-button" type="submit">送信</button>
+        </form>
+      </section>
+    </main>
+
+    <footer class="page-credit">
+      <span>AIVIS CV: <span id="footer-tts-voice">確認中</span></span>
+      <span>初回文字: <span id="footer-first-token-latency">-</span></span>
+      <span>© ゆずき</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

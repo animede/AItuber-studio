@@ -1,0 +1,5 @@
+ビルド済みのllama.cppを動かす
+
+(base) animede@animede-desktop:~$ cd /home/animede/llama.cpp/build/bin
+(base) animede@animede-desktop:~/llama.cpp/build/bin$ LD_LIBRARY_PATH=. ./llama-server   -hf unsloth/gemma-4-E4B-it-GGUF:Q4_K_M   --host 0.0.0.0   --port 8080   --reasoning off
+

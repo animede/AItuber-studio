@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.venv/
+day2/note_day2_ai_character.md
+day3/note_day3_parallel_and_character.md
