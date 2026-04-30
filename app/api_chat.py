@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .chat_event_dispatcher import ChatEventDispatcher
 from .character_registry import get_character, get_default_character
+from .robot_controller import RobotController
 from .chat_session_runtime import ChatSessionRuntime, ChatTurnRequestContext
 from .chat_turn_state_machine import ChatTurnEvent, ChatTurnStateMachine
 from .conversation_store import ConversationRecord, conversation_store
@@ -16,6 +17,7 @@ from .tts_client import TTSClient
 
 router = APIRouter(tags=["chat"])
 tts_client = TTSClient()
+robot_controller = RobotController()
 chat_session_runtime = ChatSessionRuntime(
     conversation_store=conversation_store,
     tts_client=tts_client,
@@ -137,7 +139,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
         try:
             payload = validated.payload
-            turn_state_machine = ChatTurnStateMachine(conversation_id=payload.conversation_id)
+            turn_state_machine = ChatTurnStateMachine(
+                conversation_id=payload.conversation_id,
+                on_state_changed=robot_controller.notify_state_change,
+            )
             turn_state_machine.apply(ChatTurnEvent.USER_MESSAGE_RECEIVED)
             turn_state_machine.apply(ChatTurnEvent.REQUEST_VALIDATED)
             await chat_session_runtime.execute_turn(

@@ -1427,7 +1427,7 @@ function syncTtsSegmentControls() {
   }
   elements.ttsSplitOnSoftBoundariesToggle.checked = state.ttsSplitOnSoftBoundaries;
   if (elements.ttsSplitOnSoftBoundariesLabel) {
-    elements.ttsSplitOnSoftBoundariesLabel.textContent = "読点でも短く区切る";
+    elements.ttsSplitOnSoftBoundariesLabel.textContent = "読点で区切る";
   }
 }
 
@@ -1484,7 +1484,7 @@ function syncTtsAvailability() {
   if (elements.ttsSplitOnSoftBoundariesToggle) {
     elements.ttsSplitOnSoftBoundariesToggle.disabled = false;
   }
-  elements.audioEnabledLabel.textContent = "音声を再生する";
+  elements.audioEnabledLabel.textContent = "音声再生する";
   syncTtsSegmentControls();
 }
 

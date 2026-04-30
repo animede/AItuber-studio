@@ -104,6 +104,27 @@ class ChatTurnStateMachineTests(unittest.TestCase):
 
         self.assertEqual(self.machine.message_id, "msg_test")
 
+    def test_state_change_listener_receives_only_real_state_changes(self) -> None:
+        changes: list[str] = []
+        machine = ChatTurnStateMachine(
+            conversation_id="conv_test",
+            on_state_changed=changes.append,
+        )
+
+        machine.apply(ChatTurnEvent.USER_MESSAGE_RECEIVED)
+        machine.apply(ChatTurnEvent.REQUEST_VALIDATED)
+        machine.apply(ChatTurnEvent.PROMPT_PREPARED)
+        machine.apply(ChatTurnEvent.LLM_STREAM_STARTED)
+
+        self.assertEqual(
+            changes,
+            [
+                ChatTurnState.VALIDATING_REQUEST.value,
+                ChatTurnState.PREPARING_PROMPT.value,
+                ChatTurnState.STREAMING_TEXT.value,
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

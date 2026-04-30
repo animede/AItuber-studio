@@ -55,11 +55,22 @@
               <input id="character-voice-name-input" type="text" placeholder="もも">
             </div>
             <div class="editor-grid-full">
-              <label class="field-label" for="audio-enabled-toggle">音声ストリーミング</label>
-              <label class="toggle-field" for="audio-enabled-toggle">
-                <input type="checkbox" id="audio-enabled-toggle">
-                <span id="audio-enabled-label">TTS未接続</span>
-              </label>
+              <div class="editor-toggle-row">
+                <label class="editor-toggle-primary" for="audio-enabled-toggle">
+                  <span class="editor-toggle-primary-title">音声ストリーミング</span>
+                  <span class="editor-toggle-primary-control">
+                    <input type="checkbox" id="audio-enabled-toggle">
+                    <span id="audio-enabled-label">TTS未接続</span>
+                  </span>
+                </label>
+                <label class="editor-toggle-secondary" for="tts-split-on-soft-boundaries-toggle">
+                  <span class="editor-toggle-secondary-title">TTS区切り</span>
+                  <span class="editor-toggle-secondary-control">
+                    <input type="checkbox" id="tts-split-on-soft-boundaries-toggle">
+                    <span id="tts-split-on-soft-boundaries-label">読点で区切る</span>
+                  </span>
+                </label>
+              </div>
             </div>
             <div>
               <label class="field-label" for="character-theme-color-input">テーマ色</label>
@@ -102,15 +113,6 @@
               <dt>要約文字数</dt>
               <dd>
                 <input type="number" id="summary-max-chars-input" min="1" max="2000" value="100" placeholder="1-2000">
-              </dd>
-            </div>
-            <div>
-              <dt>TTS区切り</dt>
-              <dd>
-                <label class="checkbox-field" for="tts-split-on-soft-boundaries-toggle">
-                  <input type="checkbox" id="tts-split-on-soft-boundaries-toggle">
-                  <span id="tts-split-on-soft-boundaries-label">読点でも短く区切る</span>
-                </label>
               </dd>
             </div>
             <div id="lipsync-toggle-row" class="hidden">

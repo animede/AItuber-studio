@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 import json
+from typing import Callable
 
 
 class ChatTurnState(StrEnum):
@@ -43,6 +44,9 @@ class InvalidChatTurnTransition(ValueError):
     pass
 
 
+StateChangeListener = Callable[[str], None]
+
+
 class ChatTurnStateMachine:
     _TRANSITIONS: dict[tuple[ChatTurnState, ChatTurnEvent], ChatTurnState] = {
         (ChatTurnState.IDLE, ChatTurnEvent.USER_MESSAGE_RECEIVED): ChatTurnState.VALIDATING_REQUEST,
@@ -74,11 +78,20 @@ class ChatTurnStateMachine:
         (ChatTurnState.SUMMARIZING, ChatTurnEvent.CLIENT_DISCONNECTED): ChatTurnState.CANCELLED,
     }
 
-    def __init__(self, *, conversation_id: str, message_id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str | None = None,
+        on_state_changed: StateChangeListener | None = None,
+    ) -> None:
         self.conversation_id = conversation_id
         self.message_id = message_id
         self.state = ChatTurnState.IDLE
         self.history: list[ChatTurnTransition] = []
+        self._state_change_listeners: list[StateChangeListener] = []
+        if on_state_changed is not None:
+            self._state_change_listeners.append(on_state_changed)
 
     def apply(self, event: ChatTurnEvent) -> ChatTurnState:
         next_state = self._TRANSITIONS.get((self.state, event))
@@ -95,10 +108,14 @@ class ChatTurnStateMachine:
         self.history.append(transition)
         self.state = next_state
         self._log_transition(transition)
+        self._notify_state_change(transition)
         return self.state
 
     def bind_message_id(self, message_id: str) -> None:
         self.message_id = message_id
+
+    def subscribe_state_change(self, listener: StateChangeListener) -> None:
+        self._state_change_listeners.append(listener)
 
     def _log_transition(self, transition: ChatTurnTransition) -> None:
         print(
@@ -115,3 +132,10 @@ class ChatTurnStateMachine:
             ),
             flush=True,
         )
+
+    def _notify_state_change(self, transition: ChatTurnTransition) -> None:
+        if transition.from_state == transition.to_state:
+            return
+
+        for listener in self._state_change_listeners:
+            listener(transition.to_state.value)

@@ -1,0 +1,18 @@
+***tts***
+cd aivis/Linux-x64
+./run --use_gpu
+
+***llm***
+
+
+***アプリ***
+source /home/animede/AI-character/.venv/bin/activate
+cd /home/animede/AItuber-studio
+python webapp_main.py
+
+引数付き
+/home/animede/AItuber-studio/.venv/bin/python webapp_main.py \
+  --tts-host 127.0.0.1 \
+  --tts-port 10101 \
+  --llm-host 127.0.0.1 \
+  --llm-port 8080
