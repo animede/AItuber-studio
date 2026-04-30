@@ -12,7 +12,7 @@ from .chat_event_dispatcher import ChatEventDispatcher, log_history_summary, log
 from .character_registry import CharacterDefinition, get_character
 from .chat_turn_state_machine import ChatTurnEvent, ChatTurnStateMachine
 from .conversation_store import ConversationStore, MessageRecord, MessageRole, new_message_id
-from .llm_client import build_messages, stream_chat_chunks, summarize_assistant_response
+from .llm_client import build_audio_input_content, build_messages, stream_chat_chunks, summarize_assistant_response
 from .schemas import ChatStreamRequest
 from .settings import ASSISTANT_SUMMARY_MAX_CHARS, ASSISTANT_SUMMARY_THRESHOLD_CHARS, MAX_HISTORY_PAIRS
 from .tts_client import TTSClient
@@ -95,6 +95,7 @@ class ChatSessionRuntime:
         execution_context: ChatTurnExecutionContext,
     ) -> list[dict]:
         llm_messages = self._build_turn_messages(
+            request_context=request_context,
             conversation_id=request_context.payload.conversation_id,
             system_prompt=execution_context.system_prompt,
             max_history_pairs=execution_context.max_history_pairs,
@@ -269,6 +270,7 @@ class ChatSessionRuntime:
     def _build_turn_messages(
         self,
         *,
+        request_context: ChatTurnRequestContext,
         conversation_id: str,
         system_prompt: str,
         max_history_pairs: int,
@@ -277,7 +279,20 @@ class ChatSessionRuntime:
             conversation_id,
             max_history_pairs * 2,
         )
-        return build_messages(system_prompt, recent_messages)
+        latest_user_content_override = None
+        input_audio_b64 = (request_context.payload.input_audio_b64 or "").strip()
+        if input_audio_b64:
+            latest_user_content_override = build_audio_input_content(
+                audio_b64=input_audio_b64,
+                audio_format=(request_context.payload.input_audio_format or "wav").strip(),
+                prompt_text=request_context.message_text if request_context.message_text != "音声入力" else None,
+            )
+
+        return build_messages(
+            system_prompt,
+            recent_messages,
+            latest_user_content_override=latest_user_content_override,
+        )
 
     async def _stream_response(
         self,

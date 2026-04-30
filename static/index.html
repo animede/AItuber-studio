@@ -39,7 +39,7 @@
           <div class="editor-grid">
             <div>
               <label class="field-label" for="character-id-input">キャラクタ登録名</label>
-              <input id="character-id-input" type="text" placeholder="momo" pattern="[a-z0-9][a-z0-9_-]*" spellcheck="false">
+              <input id="character-id-input" type="text" placeholder="momo" pattern="[a-z0-9][a-z0-9_\-]*" spellcheck="false">
               <p class="field-note">作成モードでは role に書いた名前を LLM でローマ字化して候補を入れます。保存ファイル名にも使うので、英小文字、数字、-、_ で保存されます。</p>
             </div>
             <div>
@@ -71,6 +71,11 @@
                   </span>
                 </label>
               </div>
+            </div>
+            <div class="editor-grid-full">
+              <label class="field-label" for="mic-level-threshold-input">無音検出しきい値</label>
+              <input id="mic-level-threshold-input" type="number" min="0.001" max="0.2" step="0.001" value="0.03">
+              <p class="field-note">現在の入力レベル: <span id="mic-level-readout">0.000</span></p>
             </div>
             <div>
               <label class="field-label" for="character-theme-color-input">テーマ色</label>
@@ -210,7 +215,15 @@
         <div id="error-banner" class="error-banner hidden"></div>
         <form id="composer" class="composer">
           <textarea id="message-input" rows="3" placeholder="ももに話しかけてください"></textarea>
-          <button id="send-button" type="submit">送信</button>
+          <div class="composer-actions">
+            <button id="mic-toggle-button" class="mic-toggle-button" type="button" aria-label="マイク入力を切り替える" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 15.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 1 0-7 0v6a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 0 1 2 0 8 8 0 0 1-7 7.94V22h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.06A8 8 0 0 1 4 12a1 1 0 1 1 2 0 6 6 0 1 0 12 0Z" fill="currentColor"/>
+              </svg>
+            </button>
+            <button id="send-button" type="submit">送信</button>
+          </div>
+          <p id="mic-status-text" class="mic-status-text">マイクOFF</p>
         </form>
       </section>
     </main>

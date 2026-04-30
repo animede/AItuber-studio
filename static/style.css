@@ -625,7 +625,8 @@ body {
 
 #history-count-input,
 #summary-threshold-input,
-#summary-max-chars-input {
+#summary-max-chars-input,
+#mic-level-threshold-input {
   max-width: 120px;
 }
 
@@ -832,9 +833,63 @@ body {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr 132px;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "input actions"
+    "status actions";
   gap: 12px;
   margin-top: 14px;
+}
+
+#message-input {
+  grid-area: input;
+}
+
+.composer-actions {
+  grid-area: actions;
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.mic-status-text {
+  grid-area: status;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.mic-toggle-button {
+  width: 60px;
+  min-height: 60px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.mic-toggle-button svg {
+  width: 24px;
+  height: 24px;
+}
+
+.mic-toggle-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.mic-toggle-button.is-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  color: #fff;
+}
+
+.mic-toggle-button:disabled {
+  cursor: default;
+  opacity: 0.58;
 }
 
 #message-input {
@@ -857,6 +912,7 @@ body {
 }
 
 #send-button {
+  min-width: 132px;
   background: linear-gradient(135deg, var(--accent), var(--accent-deep));
   color: #fff;
   font-weight: 700;
@@ -937,6 +993,15 @@ body {
 
   .composer {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "input"
+      "status"
+      "actions";
+  }
+
+  .composer-actions {
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
   }
 
   .editor-grid {

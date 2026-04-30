@@ -16,3 +16,9 @@ python webapp_main.py
   --tts-port 10101 \
   --llm-host 127.0.0.1 \
   --llm-port 8080
+
+***補足***
+
+- UI の「TTS区切り」を ON にすると、句点だけでなく読点でも短く区切って読み上げる
+- マイクボタンを ON にすると、ブラウザ側で無音検出して発話区間ごとに LLM へ送る
+- backend の schema や WebSocket payload を変更したあとに「メッセージ形式が不正です。」が出る場合は、まずサーバー再起動を確認する

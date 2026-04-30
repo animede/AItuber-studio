@@ -10,6 +10,9 @@ from .conversation_store import MessageRecord
 from .settings import ASSISTANT_SUMMARY_MAX_CHARS, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, OPENAI_TIMEOUT_SECONDS
 
 
+MessageContent = str | list[dict[str, object]]
+
+
 def create_async_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         base_url=LLM_BASE_URL,
@@ -25,11 +28,42 @@ def sanitize_registration_name(value: str) -> str:
     return normalized
 
 
-def build_messages(system_prompt: str, messages: list[MessageRecord]) -> list[dict]:
+def build_messages(
+    system_prompt: str,
+    messages: list[MessageRecord],
+    *,
+    latest_user_content_override: MessageContent | None = None,
+) -> list[dict]:
     payload = [{"role": "system", "content": system_prompt}]
+    last_user_message_id = None
+    if latest_user_content_override is not None:
+        for message in reversed(messages):
+            if message["role"] == "user":
+                last_user_message_id = message["message_id"]
+                break
+
     for message in messages:
-        payload.append({"role": message["role"], "content": message["content"]})
+        content: MessageContent = message["content"]
+        if latest_user_content_override is not None and message["message_id"] == last_user_message_id:
+            content = latest_user_content_override
+        payload.append({"role": message["role"], "content": content})
     return payload
+
+
+def build_audio_input_content(*, audio_b64: str, audio_format: str, prompt_text: str | None = None) -> list[dict[str, object]]:
+    content: list[dict[str, object]] = []
+    if prompt_text and prompt_text.strip():
+        content.append({"type": "text", "text": prompt_text.strip()})
+    content.append(
+        {
+            "type": "input_audio",
+            "input_audio": {
+                "data": audio_b64,
+                "format": audio_format,
+            },
+        }
+    )
+    return content
 
 
 async def stream_chat_chunks(messages: list[dict]):

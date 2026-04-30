@@ -16,6 +16,7 @@ const state = {
   modelName: "-",
   summaryThresholdChars: 150,
   summaryMaxChars: 100,
+  micLevelThreshold: 0.03,
   pendingFirstTokenStartedAt: 0,
   firstTokenLatencyMs: null,
   firstTokenMeasuredForTurn: false,
@@ -59,6 +60,29 @@ const state = {
   youtubePollCursor: 0,
   youtubePendingComments: [],
   youtubeLastCommentKey: "",
+  micSupported: false,
+  micRequested: false,
+  micStartPending: false,
+  micStartHintUntil: 0,
+  micCaptureActive: false,
+  micSegmentActive: false,
+  micSegmentSending: false,
+  micStream: null,
+  micAudioContext: null,
+  micSourceNode: null,
+  micProcessorNode: null,
+  micMonitorGainNode: null,
+  micPreRollBuffers: [],
+  micSegmentBuffers: [],
+  micLastSpeechAt: 0,
+  micSpeechStartedAt: 0,
+  micLastProcessAt: 0,
+  micCaptureStartedAt: 0,
+  micWarmupUntil: 0,
+  micRestartInFlight: null,
+  micRestartLastFailedAt: 0,
+  micCurrentLevel: 0,
+  micLevelReadoutAt: 0,
 };
 
 const elements = {
@@ -78,6 +102,8 @@ const elements = {
   historyCountInput: document.getElementById("history-count-input"),
   summaryThresholdInput: document.getElementById("summary-threshold-input"),
   summaryMaxCharsInput: document.getElementById("summary-max-chars-input"),
+  micLevelThresholdInput: document.getElementById("mic-level-threshold-input"),
+  micLevelReadout: document.getElementById("mic-level-readout"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
   audioEnabledLabel: document.getElementById("audio-enabled-label"),
   ttsSplitOnSoftBoundariesToggle: document.getElementById("tts-split-on-soft-boundaries-toggle"),
@@ -103,6 +129,8 @@ const elements = {
   errorBanner: document.getElementById("error-banner"),
   composer: document.getElementById("composer"),
   messageInput: document.getElementById("message-input"),
+  micToggleButton: document.getElementById("mic-toggle-button"),
+  micStatusText: document.getElementById("mic-status-text"),
   sendButton: document.getElementById("send-button"),
   newConversationButton: document.getElementById("new-conversation-button"),
   clearConversationButton: document.getElementById("clear-conversation-button"),
@@ -129,6 +157,17 @@ const elements = {
   waitingVisualPathInput: document.getElementById("waiting-visual-path-input"),
   waitingUploadInput: document.getElementById("waiting-upload-input"),
 };
+
+const DEFAULT_MIC_LEVEL_THRESHOLD = 0.03;
+const MIC_SILENCE_HOLD_MS = 900;
+const MIC_MIN_SPEECH_MS = 260;
+const MIC_PRE_ROLL_FRAMES = 6;
+const MIC_PROCESSOR_BUFFER_SIZE = 4096;
+const MIC_STARTUP_GRACE_MS = 2000;
+const MIC_WARMUP_MS = 800;
+const MIC_START_HINT_MS = 1600;
+const MIC_INACTIVITY_LIMIT_MS = 6000;
+const MIC_RESTART_FAIL_COOLDOWN_MS = 4000;
 
 const CHARACTER_UPLOAD_TARGETS = [
   {
@@ -185,7 +224,10 @@ const DEFAULT_CHARACTER_ROLE_TEMPLATE = `名前:
 
 async function init() {
   // 初期表示に必要な順で、UI バインド、状態取得、通信確立、会話開始まで進める。
+  syncMicrophoneControls();
+  syncMicrophoneThresholdControl();
   bindEvents();
+  startMicrophoneHealthCheck();
   await refreshHealth();
   await refreshTtsCatalog();
   await loadCharacters();
@@ -304,6 +346,10 @@ function bindEvents() {
     await sendMessage();
   });
 
+  elements.micToggleButton?.addEventListener("click", async () => {
+    await toggleMicrophoneCapture();
+  });
+
   elements.messageInput.addEventListener("keydown", async (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -345,6 +391,19 @@ function bindEvents() {
   elements.summaryMaxCharsInput?.addEventListener("change", () => {
     state.summaryMaxChars = parseSummaryMaxChars();
     syncSummaryControls();
+  });
+
+  elements.micLevelThresholdInput?.addEventListener("input", () => {
+    const value = elements.micLevelThresholdInput.value.trim();
+    if (!value) {
+      return;
+    }
+    state.micLevelThreshold = parseMicLevelThreshold();
+  });
+
+  elements.micLevelThresholdInput?.addEventListener("change", () => {
+    state.micLevelThreshold = parseMicLevelThreshold();
+    syncMicrophoneThresholdControl();
   });
 
   elements.ttsSplitOnSoftBoundariesToggle?.addEventListener("change", () => {
@@ -1384,6 +1443,7 @@ async function refreshHealth() {
     state.ttsAvailable = Boolean(data.tts_available);
     state.ttsStatus = data.tts_status || null;
     syncSummaryControls();
+    syncMicrophoneThresholdControl();
     syncTtsAvailability();
     if (!state.currentCharacterId) {
       state.currentCharacterId = data.default_character_id;
@@ -1412,12 +1472,26 @@ function parseSummaryMaxChars() {
   return Math.max(1, Math.min(2000, Math.round(rawValue)));
 }
 
+function parseMicLevelThreshold() {
+  const rawValue = Number(elements.micLevelThresholdInput?.value ?? state.micLevelThreshold);
+  if (!Number.isFinite(rawValue)) {
+    return state.micLevelThreshold || DEFAULT_MIC_LEVEL_THRESHOLD;
+  }
+  return Math.max(0.001, Math.min(0.2, Math.round(rawValue * 1000) / 1000));
+}
+
 function syncSummaryControls() {
   if (elements.summaryThresholdInput) {
     elements.summaryThresholdInput.value = String(state.summaryThresholdChars);
   }
   if (elements.summaryMaxCharsInput) {
     elements.summaryMaxCharsInput.value = String(state.summaryMaxChars);
+  }
+}
+
+function syncMicrophoneThresholdControl() {
+  if (elements.micLevelThresholdInput) {
+    elements.micLevelThresholdInput.value = state.micLevelThreshold.toFixed(3);
   }
 }
 
@@ -2137,37 +2211,9 @@ async function sendChatMessageText(message) {
   const historyCount = Number(elements.historyCountInput.value || 10);
   // TTS の実利用可否と、UI トグルの両方を見てそのターンの音声有無を決める。
   const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
-  if (!message || state.isStreaming || !state.currentConversationId) {
-    // 空送信、二重送信、会話未作成のいずれも送信しない。
+  if (!beginOutgoingTurn({ userContent: message, audioEnabled })) {
     return;
   }
-
-  hideError();
-  resetAudioPlayback();
-  // 新しいターン開始時に、前ターンの再生状態と描画キューを必ず初期化する。
-  state.hasStartedConversation = true;
-  state.isStreaming = true;
-  state.currentTurnAudioEnabled = audioEnabled;
-  state.renderQueue = [];
-  state.textStreamEnded = false;
-  state.turnEnded = false;
-  state.currentAssistantMessageId = null;
-  state.pendingFirstTokenStartedAt = performance.now();
-  state.firstTokenLatencyMs = null;
-  state.firstTokenMeasuredForTurn = false;
-  renderFirstTokenLatency();
-  syncCharacterVisualMode();
-  setComposerDisabled(true);
-
-  const userMessage = {
-    // ユーザー発話は即時反映し、assistant 側だけを後追いストリームで埋める。
-    message_id: `local_user_${Date.now()}`,
-    role: "user",
-    content: message,
-    timestamp: new Date().toISOString(),
-    status: "done",
-  };
-  appendMessage(userMessage);
 
   try {
     await connectWebSocket();
@@ -2195,6 +2241,78 @@ async function sendChatMessageText(message) {
   }
 }
 
+async function sendChatMessageAudio(audioBase64, audioFormat) {
+  const roleText = elements.roleText.value.trim();
+  const historyCount = Number(elements.historyCountInput.value || 10);
+  const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
+  if (!audioBase64 || !beginOutgoingTurn({ userContent: "音声入力", audioEnabled })) {
+    return;
+  }
+
+  try {
+    await connectWebSocket();
+    if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket接続を利用できません。");
+    }
+
+    state.socket.send(
+      JSON.stringify({
+        action: "chat",
+        conversation_id: state.currentConversationId,
+        message: null,
+        role: roleText,
+        max_history: historyCount,
+        summary_threshold_chars: parseSummaryThresholdChars(),
+        summary_max_chars: parseSummaryMaxChars(),
+        audio_enabled: audioEnabled,
+        tts_split_on_soft_boundaries: state.ttsSplitOnSoftBoundaries,
+        selected_style_id: state.selectedTtsStyleId,
+        input_audio_b64: audioBase64,
+        input_audio_format: audioFormat,
+      })
+    );
+  } catch (error) {
+    showError(error.message || "通信中にエラーが発生しました。");
+    finalizeStreamingError();
+  }
+}
+
+function beginOutgoingTurn({ userContent, audioEnabled }) {
+  if (!userContent || state.isStreaming || !state.currentConversationId) {
+    // 空送信、二重送信、会話未作成のいずれも送信しない。
+    return false;
+  }
+
+  hideError();
+  resetAudioPlayback();
+  if (state.micRequested && state.micCaptureActive) {
+    stopMicrophoneCapture({ preserveRequested: true });
+  }
+
+  state.hasStartedConversation = true;
+  state.isStreaming = true;
+  state.currentTurnAudioEnabled = audioEnabled;
+  state.renderQueue = [];
+  state.textStreamEnded = false;
+  state.turnEnded = false;
+  state.currentAssistantMessageId = null;
+  state.pendingFirstTokenStartedAt = performance.now();
+  state.firstTokenLatencyMs = null;
+  state.firstTokenMeasuredForTurn = false;
+  renderFirstTokenLatency();
+  syncCharacterVisualMode();
+  setComposerDisabled(true);
+
+  appendMessage({
+    message_id: `local_user_${Date.now()}`,
+    role: "user",
+    content: userContent,
+    timestamp: new Date().toISOString(),
+    status: "done",
+  });
+  return true;
+}
+
 async function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message) {
@@ -2202,6 +2320,429 @@ async function sendMessage() {
   }
   elements.messageInput.value = "";
   await sendChatMessageText(message);
+}
+
+function isMicrophoneSupported() {
+  return Boolean(navigator.mediaDevices?.getUserMedia && (window.AudioContext || window.webkitAudioContext));
+}
+
+function syncMicrophoneControls() {
+  state.micSupported = isMicrophoneSupported();
+  if (!elements.micToggleButton || !elements.micStatusText) {
+    return;
+  }
+
+  elements.micToggleButton.classList.toggle("is-active", state.micRequested);
+  elements.micToggleButton.setAttribute("aria-pressed", state.micRequested ? "true" : "false");
+  elements.micToggleButton.disabled = !state.micSupported || state.micSegmentSending || state.isStreaming;
+
+  if (!state.micSupported) {
+    elements.micStatusText.textContent = "このブラウザはマイク入力に未対応です。";
+    return;
+  }
+  if (state.isStreaming) {
+    elements.micStatusText.textContent = state.micRequested ? "応答中のためマイク待機を一時停止中。" : "マイクOFF";
+    return;
+  }
+  if (state.micSegmentSending) {
+    elements.micStatusText.textContent = "音声入力を LLM に送信中。";
+    return;
+  }
+  if (!state.micRequested) {
+    elements.micStatusText.textContent = "マイクOFF";
+    return;
+  }
+  if (state.micStartPending || !state.micCaptureActive) {
+    const showStartHint = performance.now() < state.micStartHintUntil;
+    elements.micStatusText.textContent = showStartHint
+      ? "マイク起動中。少し待ってから話してください。"
+      : "マイク再接続中…";
+    return;
+  }
+
+  elements.micStatusText.textContent = state.micSegmentActive
+    ? "発話を検出中。無音で自動送信します。"
+    : "マイクON。話し始めると自動で録音します。";
+}
+
+async function toggleMicrophoneCapture() {
+  if (!state.micSupported) {
+    showError("このブラウザではマイク入力を利用できません。");
+    return;
+  }
+
+  if (state.micRequested) {
+    stopMicrophoneCapture({ preserveRequested: false });
+    syncMicrophoneControls();
+    return;
+  }
+
+  state.micRequested = true;
+  state.micStartHintUntil = performance.now() + MIC_START_HINT_MS;
+  syncMicrophoneControls();
+  try {
+    await ensureMicrophoneCapture();
+  } catch (error) {
+    state.micRequested = false;
+    syncMicrophoneControls();
+    showError(error.message || "マイク入力を開始できませんでした。");
+  }
+}
+
+async function ensureMicrophoneCapture() {
+  if (!state.micRequested || state.isStreaming || state.micCaptureActive || state.micStartPending) {
+    syncMicrophoneControls();
+    return;
+  }
+
+  state.micStartPending = true;
+  syncMicrophoneControls();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextCtor();
+    await audioContext.resume();
+    const sourceNode = audioContext.createMediaStreamSource(stream);
+    const processorNode = audioContext.createScriptProcessor(MIC_PROCESSOR_BUFFER_SIZE, 1, 1);
+    const monitorGainNode = audioContext.createGain();
+    monitorGainNode.gain.value = 0;
+
+    for (const track of stream.getAudioTracks()) {
+      track.addEventListener("ended", handleMicrophoneTrackEnded);
+    }
+
+    processorNode.onaudioprocess = handleMicrophoneAudioProcess;
+    sourceNode.connect(processorNode);
+    processorNode.connect(monitorGainNode);
+    monitorGainNode.connect(audioContext.destination);
+
+    const startedAt = performance.now();
+    state.micStream = stream;
+    state.micAudioContext = audioContext;
+    state.micSourceNode = sourceNode;
+    state.micProcessorNode = processorNode;
+    state.micMonitorGainNode = monitorGainNode;
+    state.micCaptureActive = true;
+    state.micSegmentActive = false;
+    state.micPreRollBuffers = [];
+    state.micSegmentBuffers = [];
+    state.micLastProcessAt = startedAt;
+    state.micCaptureStartedAt = startedAt;
+    state.micWarmupUntil = startedAt + MIC_WARMUP_MS;
+  } finally {
+    state.micStartPending = false;
+    syncMicrophoneControls();
+  }
+}
+
+function stopMicrophoneCapture({ preserveRequested } = { preserveRequested: false }) {
+  if (!preserveRequested) {
+    state.micRequested = false;
+  }
+
+  state.micStartPending = false;
+  state.micCaptureActive = false;
+  state.micSegmentActive = false;
+  state.micPreRollBuffers = [];
+  state.micSegmentBuffers = [];
+  state.micLastSpeechAt = 0;
+  state.micSpeechStartedAt = 0;
+  state.micLastProcessAt = 0;
+  state.micCaptureStartedAt = 0;
+  state.micWarmupUntil = 0;
+  state.micStartHintUntil = 0;
+
+  if (state.micProcessorNode) {
+    state.micProcessorNode.onaudioprocess = null;
+    try {
+      state.micProcessorNode.disconnect();
+    } catch {
+      // 切断済みでも無視する。
+    }
+    state.micProcessorNode = null;
+  }
+
+  if (state.micMonitorGainNode) {
+    try {
+      state.micMonitorGainNode.disconnect();
+    } catch {
+      // 切断済みでも無視する。
+    }
+    state.micMonitorGainNode = null;
+  }
+
+  if (state.micSourceNode) {
+    try {
+      state.micSourceNode.disconnect();
+    } catch {
+      // 切断済みでも無視する。
+    }
+    state.micSourceNode = null;
+  }
+
+  if (state.micStream) {
+    for (const track of state.micStream.getTracks()) {
+      track.removeEventListener("ended", handleMicrophoneTrackEnded);
+      track.stop();
+    }
+    state.micStream = null;
+  }
+
+  if (state.micAudioContext) {
+    void state.micAudioContext.close();
+    state.micAudioContext = null;
+  }
+}
+
+function handleMicrophoneTrackEnded() {
+  state.micCaptureActive = false;
+  if (!state.micRequested || state.isStreaming || state.micSegmentSending) {
+    syncMicrophoneControls();
+    return;
+  }
+  void restartMicrophoneCapture("マイク入力が停止したため再接続します。");
+}
+
+function isMicrophoneCaptureHealthy() {
+  if (state.micStartPending) {
+    return true;
+  }
+  if (!state.micCaptureActive) {
+    return false;
+  }
+  const stream = state.micStream;
+  const audioContext = state.micAudioContext;
+  if (!stream || !audioContext || !state.micProcessorNode || !state.micSourceNode) {
+    return false;
+  }
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length || audioTracks.some((track) => track.readyState !== "live")) {
+    return false;
+  }
+  if (audioContext.state !== "running") {
+    return false;
+  }
+  if (performance.now() - state.micCaptureStartedAt < MIC_STARTUP_GRACE_MS) {
+    return true;
+  }
+  return performance.now() - state.micLastProcessAt < MIC_INACTIVITY_LIMIT_MS;
+}
+
+async function restartMicrophoneCapture(statusMessage = null) {
+  if (!state.micRequested || state.isStreaming || state.micSegmentSending) {
+    syncMicrophoneControls();
+    return;
+  }
+  if (state.micRestartInFlight) {
+    return state.micRestartInFlight;
+  }
+  if (performance.now() - state.micRestartLastFailedAt < MIC_RESTART_FAIL_COOLDOWN_MS) {
+    return;
+  }
+
+  const task = (async () => {
+    stopMicrophoneCapture({ preserveRequested: true });
+    if (statusMessage && elements.micStatusText) {
+      elements.micStatusText.textContent = statusMessage;
+    }
+
+    try {
+      await ensureMicrophoneCapture();
+      state.micRestartLastFailedAt = 0;
+    } catch (error) {
+      state.micRestartLastFailedAt = performance.now();
+      state.micRequested = false;
+      syncMicrophoneControls();
+      showError(error.message || "マイク入力を再接続できませんでした。");
+    }
+  })();
+  state.micRestartInFlight = task;
+  try {
+    await task;
+  } finally {
+    state.micRestartInFlight = null;
+  }
+}
+
+function startMicrophoneHealthCheck() {
+  window.setInterval(() => {
+    if (!state.micRequested || state.isStreaming || state.micSegmentSending) {
+      return;
+    }
+    if (isMicrophoneCaptureHealthy()) {
+      return;
+    }
+    void restartMicrophoneCapture();
+  }, 2000);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    if (!state.micRequested || state.isStreaming || state.micSegmentSending) {
+      return;
+    }
+    if (isMicrophoneCaptureHealthy()) {
+      return;
+    }
+    void restartMicrophoneCapture();
+  });
+}
+
+function handleMicrophoneAudioProcess(event) {
+  if (!state.micCaptureActive || state.isStreaming) {
+    return;
+  }
+
+  const now = performance.now();
+  state.micLastProcessAt = now;
+
+  if (now < state.micWarmupUntil) {
+    state.micSegmentActive = false;
+    state.micPreRollBuffers = [];
+    state.micSegmentBuffers = [];
+    state.micLastSpeechAt = 0;
+    state.micSpeechStartedAt = 0;
+    return;
+  }
+
+  const inputData = event.inputBuffer.getChannelData(0);
+  const frame = new Float32Array(inputData.length);
+  frame.set(inputData);
+  const level = computeAudioLevel(frame);
+  state.micCurrentLevel = level;
+  if (now - state.micLevelReadoutAt > 120 && elements.micLevelReadout) {
+    elements.micLevelReadout.textContent = level.toFixed(3);
+    state.micLevelReadoutAt = now;
+  }
+
+  if (!state.micSegmentActive) {
+    state.micPreRollBuffers.push(frame);
+    if (state.micPreRollBuffers.length > MIC_PRE_ROLL_FRAMES) {
+      state.micPreRollBuffers.shift();
+    }
+
+    if (level < state.micLevelThreshold) {
+      return;
+    }
+
+    state.micSegmentActive = true;
+    state.micSpeechStartedAt = now;
+    state.micLastSpeechAt = now;
+    state.micSegmentBuffers = [...state.micPreRollBuffers, frame];
+    state.micPreRollBuffers = [];
+    syncMicrophoneControls();
+    return;
+  }
+
+  state.micSegmentBuffers.push(frame);
+  if (level >= state.micLevelThreshold) {
+    state.micLastSpeechAt = now;
+    return;
+  }
+  if (now - state.micLastSpeechAt < MIC_SILENCE_HOLD_MS) {
+    return;
+  }
+  if (now - state.micSpeechStartedAt < MIC_MIN_SPEECH_MS) {
+    return;
+  }
+
+  const segmentBuffers = state.micSegmentBuffers.slice();
+  state.micSegmentActive = false;
+  state.micSegmentBuffers = [];
+  state.micPreRollBuffers = [];
+  syncMicrophoneControls();
+  void submitMicrophoneSegment(segmentBuffers, event.inputBuffer.sampleRate);
+}
+
+function computeAudioLevel(frame) {
+  let total = 0;
+  for (let index = 0; index < frame.length; index += 1) {
+    total += frame[index] * frame[index];
+  }
+  return Math.sqrt(total / frame.length);
+}
+
+async function submitMicrophoneSegment(segmentBuffers, sampleRate) {
+  if (!segmentBuffers.length || state.isStreaming || !state.currentConversationId) {
+    return;
+  }
+
+  state.micSegmentSending = true;
+  stopMicrophoneCapture({ preserveRequested: true });
+  syncMicrophoneControls();
+
+  try {
+    const wavBuffer = encodeWavBuffer(segmentBuffers, sampleRate);
+    await sendChatMessageAudio(arrayBufferToBase64(wavBuffer), "wav");
+  } finally {
+    state.micSegmentSending = false;
+    syncMicrophoneControls();
+  }
+}
+
+function encodeWavBuffer(segmentBuffers, sampleRate) {
+  const samples = mergeAudioFrames(segmentBuffers);
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+
+  return buffer;
+}
+
+function mergeAudioFrames(segmentBuffers) {
+  const totalLength = segmentBuffers.reduce((sum, frame) => sum + frame.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const frame of segmentBuffers) {
+    merged.set(frame, offset);
+    offset += frame.length;
+  }
+  return merged;
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
 }
 
 function handleSocketEvent(event) {
@@ -2282,6 +2823,7 @@ function playNextAudioSegment() {
     state.isAudioPlaying = false;
     state.currentAudioElement = null;
     syncCharacterVisualMode();
+    finishTurnIfReady();
     return;
   }
 
@@ -2395,9 +2937,19 @@ function finishTextStreamingIfReady() {
   finishTurnIfReady();
 }
 
+function isTurnPlaybackPending() {
+  if (!state.currentTurnAudioEnabled) {
+    return false;
+  }
+  return state.isAudioPlaying || state.audioQueue.length > 0 || Boolean(state.currentAudioElement);
+}
+
 function finishTurnIfReady() {
   // turn 全体の終了通知が来ていて、本文描画も終わっていれば入力欄を再開する。
   if (!state.turnEnded || state.renderQueue.length > 0 || state.renderLoopRunning || !state.currentAssistantMessageId) {
+    return;
+  }
+  if (isTurnPlaybackPending()) {
     return;
   }
   state.isStreaming = false;
@@ -2454,6 +3006,15 @@ function setComposerDisabled(disabled) {
   elements.sendButton.disabled = disabled;
   elements.newConversationButton.disabled = disabled;
   elements.clearConversationButton.disabled = disabled;
+
+  if (!disabled && state.micRequested && !state.micCaptureActive && !state.micSegmentSending) {
+    void ensureMicrophoneCapture().catch((error) => {
+      state.micRequested = false;
+      syncMicrophoneControls();
+      showError(error.message || "マイク入力を再開できませんでした。");
+    });
+  }
+  syncMicrophoneControls();
 }
 
 function showError(message) {

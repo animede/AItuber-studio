@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .conversation_store import MessageRole
 
@@ -39,14 +39,38 @@ class ConversationCreateRequest(BaseModel):
 
 class ChatStreamRequest(BaseModel):
     conversation_id: str
-    message: str = Field(min_length=1)
+    message: str | None = Field(default=None, min_length=1)
     role: str | None = Field(default=None, min_length=1)
     max_history: int | None = Field(default=None, ge=0, le=20)
     summary_threshold_chars: int | None = Field(default=None, ge=0, le=4000)
     summary_max_chars: int | None = Field(default=None, ge=1, le=2000)
-    audio_enabled: bool
+    audio_enabled: bool = False
     tts_split_on_soft_boundaries: bool = False
     selected_style_id: int | None = None
+    input_audio_b64: str | None = None
+    input_audio_format: str | None = Field(default=None, min_length=1)
+
+    @field_validator("message", "role", "input_audio_b64", "input_audio_format", mode="before")
+    @classmethod
+    def normalize_blank_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("selected_style_id", mode="before")
+    @classmethod
+    def normalize_selected_style_id(cls, value: object) -> int | None | object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(stripped)
+        return value
 
 
 class YouTubeCommentStartRequest(BaseModel):

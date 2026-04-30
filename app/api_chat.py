@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -15,6 +16,7 @@ from .schemas import ChatStreamRequest, ConversationCreateRequest
 from .tts_client import TTSClient
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 tts_client = TTSClient()
 robot_controller = RobotController()
@@ -42,7 +44,8 @@ async def validate_chat_request(
 
     try:
         payload = ChatStreamRequest.model_validate(raw_payload)
-    except ValidationError:
+    except ValidationError as exc:
+        logger.warning("invalid chat payload: %s payload=%s", exc, raw_payload)
         await dispatcher.send_error("メッセージ形式が不正です。")
         return None
 
@@ -51,10 +54,18 @@ async def validate_chat_request(
         await dispatcher.send_error("Conversation not found")
         return None
 
-    message_text = payload.message.strip()
-    if not message_text:
-        await dispatcher.send_error("Message must not be empty")
+    message_text = (payload.message or "").strip()
+    has_audio_input = bool((payload.input_audio_b64 or "").strip())
+    if not message_text and not has_audio_input:
+        await dispatcher.send_error("Message or input audio is required")
         return None
+
+    if has_audio_input and not (payload.input_audio_format or "").strip():
+        await dispatcher.send_error("Audio input format is required")
+        return None
+
+    if not message_text and has_audio_input:
+        message_text = "音声入力"
 
     return ValidatedChatRequest(
         payload=payload,
