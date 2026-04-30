@@ -107,7 +107,7 @@ body {
   flex: 1;
 }
 
-/* 拡大表示中は左カラムを畳み、右側だけで完結するレイアウトへ切り替える。 */
+/* 拡大表示中は設定パネルを畳み、右ペイン全体を拡大レイアウトに使う。 */
 .layout.visual-expanded {
   grid-template-columns: 1fr;
 }
@@ -669,11 +669,17 @@ body {
   overflow: hidden;
 }
 
-/* 拡大メディアを会話ログの上に載せるときだけ、縦方向のグリッドに切り替える。 */
+/* 拡大時は左に大きいキャラ表示、右に狭い会話履歴を置く。 */
 .chat-panel.media-expanded {
   display: grid;
-  grid-template-rows: minmax(220px, 46vh) minmax(0, 1fr) auto auto;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.75fr) minmax(300px, 0.85fr);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "media messages"
+    "media error"
+    "media composer";
+  align-items: stretch;
+  gap: 16px;
 }
 
 /* 右側の拡大メディア用ステージ。画像と動画のどちらでも同じ箱に収める。 */
@@ -704,6 +710,24 @@ body {
 /* 拡大時のみステージを表示し、普段は DOM を残したまま隠す。 */
 .chat-panel.media-expanded .chat-visual-stage {
   display: block;
+  grid-area: media;
+  min-height: 0;
+  height: 100%;
+}
+
+.chat-panel.media-expanded .chat-messages {
+  grid-area: messages;
+  min-height: 0;
+  height: 100%;
+}
+
+.chat-panel.media-expanded .error-banner {
+  grid-area: error;
+  margin-top: 0;
+}
+
+.chat-panel.media-expanded .composer {
+  grid-area: composer;
 }
 
 .chat-visual-media > img:not(.lipsync-mouth),
@@ -753,6 +777,13 @@ body {
 .chat-panel.media-expanded .chat-messages {
   min-height: 0;
   height: 100%;
+}
+
+.chat-panel.media-expanded .chat-visual-media > img:not(.lipsync-mouth),
+.chat-panel.media-expanded .chat-visual-media > video,
+.chat-panel.media-expanded .chat-visual-stage > img,
+.chat-panel.media-expanded .chat-visual-stage > video {
+  object-fit: contain;
 }
 
 .message-row {
@@ -881,7 +912,13 @@ body {
   }
 
   .chat-panel.media-expanded {
+    grid-template-columns: 1fr;
     grid-template-rows: minmax(180px, 38vh) minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "media"
+      "messages"
+      "error"
+      "composer";
   }
 }
 
