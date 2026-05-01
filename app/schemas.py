@@ -73,6 +73,71 @@ class ChatStreamRequest(BaseModel):
         return value
 
 
+class ImageAnalysisStreamRequest(BaseModel):
+    conversation_id: str
+    role: str | None = Field(default=None, min_length=1)
+    summary_threshold_chars: int | None = Field(default=None, ge=0, le=4000)
+    summary_max_chars: int | None = Field(default=None, ge=1, le=2000)
+    audio_enabled: bool = False
+    tts_split_on_soft_boundaries: bool = False
+    selected_style_id: int | None = None
+    image_b64: str = Field(min_length=1)
+    image_format: str = Field(default="jpeg", min_length=1)
+
+    @field_validator("conversation_id", "role", "image_b64", "image_format", mode="before")
+    @classmethod
+    def normalize_stream_image_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("selected_style_id", mode="before")
+    @classmethod
+    def normalize_stream_image_selected_style_id(cls, value: object) -> int | None | object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(stripped)
+        return value
+
+
+class ImageAnalysisRequest(BaseModel):
+    conversation_id: str
+    image_b64: str = Field(min_length=1)
+    image_format: str = Field(default="jpeg", min_length=1)
+    role_text: str | None = None
+    audio_enabled: bool = False
+    selected_style_id: int | None = None
+
+    @field_validator("conversation_id", "image_b64", "image_format", "role_text", mode="before")
+    @classmethod
+    def normalize_image_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("selected_style_id", mode="before")
+    @classmethod
+    def normalize_image_selected_style_id(cls, value: object) -> int | None | object:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            return int(stripped)
+        return value
+
+
 class YouTubeCommentStartRequest(BaseModel):
     conversation_id: str
     video_id: str = Field(min_length=1)

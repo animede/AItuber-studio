@@ -12,8 +12,14 @@ from .chat_event_dispatcher import ChatEventDispatcher, log_history_summary, log
 from .character_registry import CharacterDefinition, get_character
 from .chat_turn_state_machine import ChatTurnEvent, ChatTurnStateMachine
 from .conversation_store import ConversationStore, MessageRecord, MessageRole, new_message_id
-from .llm_client import build_audio_input_content, build_messages, stream_chat_chunks, summarize_assistant_response
-from .schemas import ChatStreamRequest
+from .llm_client import (
+    build_audio_input_content,
+    build_character_image_analysis_messages,
+    build_messages,
+    stream_chat_chunks,
+    summarize_assistant_response,
+)
+from .schemas import ChatStreamRequest, ImageAnalysisStreamRequest
 from .settings import ASSISTANT_SUMMARY_MAX_CHARS, ASSISTANT_SUMMARY_THRESHOLD_CHARS, MAX_HISTORY_PAIRS
 from .tts_client import TTSClient
 
@@ -31,11 +37,19 @@ class ChatTurnRequestContext:
     turn_state_machine: ChatTurnStateMachine
 
 
+@dataclass(frozen=True)
+class ImageTurnRequestContext:
+    websocket: WebSocket
+    payload: ImageAnalysisStreamRequest
+    character_id: str
+    turn_state_machine: ChatTurnStateMachine
+
+
 @dataclass
 class ChatTurnExecutionContext:
     dispatcher: ChatEventDispatcher
     character: CharacterDefinition
-    user_message: MessageRecord
+    user_message: MessageRecord | None
     assistant_message_id: str
     system_prompt: str
     max_history_pairs: int
@@ -89,6 +103,55 @@ class ChatSessionRuntime:
                 fatal=True,
             )
 
+    async def execute_image_turn(self, request_context: ImageTurnRequestContext) -> None:
+        execution_context = self._build_image_execution_context(request_context)
+
+        try:
+            llm_messages = self._build_image_turn_messages(request_context)
+            await self._start_generic_turn(
+                conversation_id=request_context.payload.conversation_id,
+                character_id=execution_context.character.id,
+                message_id=execution_context.assistant_message_id,
+                audio_enabled=execution_context.audio_enabled,
+                selected_style_id=execution_context.selected_style_id,
+                turn_state_machine=request_context.turn_state_machine,
+                dispatcher=execution_context.dispatcher,
+                audio_pipeline=execution_context.audio_pipeline,
+            )
+            execution_context.full_response = await self._run_generic_turn_stream(
+                conversation_id=request_context.payload.conversation_id,
+                message_id=execution_context.assistant_message_id,
+                turn_state_machine=request_context.turn_state_machine,
+                dispatcher=execution_context.dispatcher,
+                audio_pipeline=execution_context.audio_pipeline,
+                audio_enabled=execution_context.audio_enabled,
+                llm_messages=llm_messages,
+            )
+            await self._finish_generic_turn(
+                conversation_id=request_context.payload.conversation_id,
+                turn_state_machine=request_context.turn_state_machine,
+                execution_context=execution_context,
+            )
+        except WebSocketDisconnect:
+            self._abort_turn(
+                request_context=request_context,
+                execution_context=execution_context,
+                event=ChatTurnEvent.CLIENT_DISCONNECTED,
+            )
+            raise
+        except Exception as exc:
+            self._abort_turn(
+                request_context=request_context,
+                execution_context=execution_context,
+                event=ChatTurnEvent.TURN_FAILED,
+            )
+            await execution_context.dispatcher.send_error(
+                str(exc),
+                message_id=execution_context.assistant_message_id,
+                stage="llm",
+                fatal=True,
+            )
+
     async def _start_turn(
         self,
         request_context: ChatTurnRequestContext,
@@ -100,17 +163,16 @@ class ChatSessionRuntime:
             system_prompt=execution_context.system_prompt,
             max_history_pairs=execution_context.max_history_pairs,
         )
-        request_context.turn_state_machine.apply(ChatTurnEvent.PROMPT_PREPARED)
-        execution_context.audio_pipeline.start()
-
-        await execution_context.dispatcher.send_start(
+        await self._start_generic_turn(
             conversation_id=request_context.payload.conversation_id,
             character_id=execution_context.character.id,
             message_id=execution_context.assistant_message_id,
             audio_enabled=execution_context.audio_enabled,
             selected_style_id=execution_context.selected_style_id,
+            turn_state_machine=request_context.turn_state_machine,
+            dispatcher=execution_context.dispatcher,
+            audio_pipeline=execution_context.audio_pipeline,
         )
-        request_context.turn_state_machine.apply(ChatTurnEvent.LLM_STREAM_STARTED)
         return llm_messages
 
     async def _run_turn_stream(
@@ -119,18 +181,14 @@ class ChatSessionRuntime:
         execution_context: ChatTurnExecutionContext,
         llm_messages: list[dict],
     ) -> str:
-        async def handle_first_chunk() -> None:
-            await self._handle_first_chunk(request_context)
-
-        async def handle_stream_chunk(chunk: str) -> None:
-            await self._handle_stream_chunk(request_context, execution_context, chunk)
-
-        return await self._stream_response(
+        return await self._run_generic_turn_stream(
             conversation_id=request_context.payload.conversation_id,
             message_id=execution_context.assistant_message_id,
-            messages=llm_messages,
-            on_chunk=handle_stream_chunk,
-            on_first_chunk=handle_first_chunk,
+            turn_state_machine=request_context.turn_state_machine,
+            dispatcher=execution_context.dispatcher,
+            audio_pipeline=execution_context.audio_pipeline,
+            audio_enabled=execution_context.audio_enabled,
+            llm_messages=llm_messages,
         )
 
     async def _finish_turn(
@@ -138,58 +196,111 @@ class ChatSessionRuntime:
         request_context: ChatTurnRequestContext,
         execution_context: ChatTurnExecutionContext,
     ) -> None:
+        await self._finish_generic_turn(
+            conversation_id=request_context.payload.conversation_id,
+            turn_state_machine=request_context.turn_state_machine,
+            execution_context=execution_context,
+        )
+
+    async def _start_generic_turn(
+        self,
+        *,
+        conversation_id: str,
+        character_id: str,
+        message_id: str,
+        audio_enabled: bool,
+        selected_style_id: int | None,
+        turn_state_machine: ChatTurnStateMachine,
+        dispatcher: ChatEventDispatcher,
+        audio_pipeline: AudioPipeline,
+    ) -> None:
+        turn_state_machine.apply(ChatTurnEvent.PROMPT_PREPARED)
+        audio_pipeline.start()
+        await dispatcher.send_start(
+            conversation_id=conversation_id,
+            character_id=character_id,
+            message_id=message_id,
+            audio_enabled=audio_enabled,
+            selected_style_id=selected_style_id,
+        )
+        turn_state_machine.apply(ChatTurnEvent.LLM_STREAM_STARTED)
+
+    async def _run_generic_turn_stream(
+        self,
+        *,
+        conversation_id: str,
+        message_id: str,
+        turn_state_machine: ChatTurnStateMachine,
+        dispatcher: ChatEventDispatcher,
+        audio_pipeline: AudioPipeline,
+        audio_enabled: bool,
+        llm_messages: list[dict],
+    ) -> str:
+        async def handle_first_chunk() -> None:
+            turn_state_machine.apply(ChatTurnEvent.LLM_FIRST_CHUNK_RECEIVED)
+
+        async def handle_stream_chunk(chunk: str) -> None:
+            await dispatcher.send_delta(message_id=message_id, delta=chunk)
+            if audio_enabled:
+                turn_state_machine.apply(ChatTurnEvent.AUDIO_SEGMENT_ENQUEUED)
+            await audio_pipeline.push_text_chunk(chunk)
+
+        return await self._stream_response(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            messages=llm_messages,
+            on_chunk=handle_stream_chunk,
+            on_first_chunk=handle_first_chunk,
+        )
+
+    async def _finish_generic_turn(
+        self,
+        *,
+        conversation_id: str,
+        turn_state_machine: ChatTurnStateMachine,
+        execution_context: ChatTurnExecutionContext,
+    ) -> None:
         if execution_context.full_response:
             self.conversation_store.append_assistant_message(
-                request_context.payload.conversation_id,
+                conversation_id,
                 execution_context.full_response,
                 message_id=execution_context.assistant_message_id,
             )
 
-        request_context.turn_state_machine.apply(ChatTurnEvent.LLM_STREAM_FINISHED)
+        turn_state_machine.apply(ChatTurnEvent.LLM_STREAM_FINISHED)
         await execution_context.dispatcher.send_text_end(message_id=execution_context.assistant_message_id)
 
-        execution_context.summary_task = self._create_summary_task(request_context, execution_context)
+        execution_context.summary_task = self._create_summary_task(
+            conversation_id=conversation_id,
+            turn_state_machine=turn_state_machine,
+            execution_context=execution_context,
+        )
 
         await execution_context.audio_pipeline.finish()
-        request_context.turn_state_machine.apply(ChatTurnEvent.AUDIO_PIPELINE_FINISHED)
+        turn_state_machine.apply(ChatTurnEvent.AUDIO_PIPELINE_FINISHED)
         if execution_context.summary_task is not None:
             await execution_context.summary_task
 
-        self._complete_summary_state(request_context, execution_context)
+        self._complete_summary_state(turn_state_machine, execution_context)
         await execution_context.dispatcher.send_end(
             message_id=execution_context.assistant_message_id,
             finish_reason="stop",
         )
 
-    async def _handle_first_chunk(self, request_context: ChatTurnRequestContext) -> None:
-        request_context.turn_state_machine.apply(ChatTurnEvent.LLM_FIRST_CHUNK_RECEIVED)
-
-    async def _handle_stream_chunk(
-        self,
-        request_context: ChatTurnRequestContext,
-        execution_context: ChatTurnExecutionContext,
-        chunk: str,
-    ) -> None:
-        await execution_context.dispatcher.send_delta(
-            message_id=execution_context.assistant_message_id,
-            delta=chunk,
-        )
-        if execution_context.audio_enabled:
-            request_context.turn_state_machine.apply(ChatTurnEvent.AUDIO_SEGMENT_ENQUEUED)
-        await execution_context.audio_pipeline.push_text_chunk(chunk)
-
     def _create_summary_task(
         self,
-        request_context: ChatTurnRequestContext,
+        *,
+        conversation_id: str,
+        turn_state_machine: ChatTurnStateMachine,
         execution_context: ChatTurnExecutionContext,
     ) -> asyncio.Task | None:
         if not execution_context.full_response:
             return None
 
-        request_context.turn_state_machine.apply(ChatTurnEvent.SUMMARY_STARTED)
+        turn_state_machine.apply(ChatTurnEvent.SUMMARY_STARTED)
         return asyncio.create_task(
             self._maybe_summarize_turn(
-                conversation_id=request_context.payload.conversation_id,
+                conversation_id=conversation_id,
                 dispatcher=execution_context.dispatcher,
                 assistant_message_id=execution_context.assistant_message_id,
                 response_text=execution_context.full_response,
@@ -200,30 +311,31 @@ class ChatSessionRuntime:
 
     def _complete_summary_state(
         self,
-        request_context: ChatTurnRequestContext,
+        turn_state_machine: ChatTurnStateMachine,
         execution_context: ChatTurnExecutionContext,
     ) -> None:
         if execution_context.full_response:
-            request_context.turn_state_machine.apply(ChatTurnEvent.SUMMARY_FINISHED)
+            turn_state_machine.apply(ChatTurnEvent.SUMMARY_FINISHED)
             return
 
-        request_context.turn_state_machine.apply(ChatTurnEvent.SUMMARY_STARTED)
-        request_context.turn_state_machine.apply(ChatTurnEvent.SUMMARY_FINISHED)
+        turn_state_machine.apply(ChatTurnEvent.SUMMARY_STARTED)
+        turn_state_machine.apply(ChatTurnEvent.SUMMARY_FINISHED)
 
     def _abort_turn(
         self,
         *,
-        request_context: ChatTurnRequestContext,
+        request_context: ChatTurnRequestContext | ImageTurnRequestContext,
         execution_context: ChatTurnExecutionContext,
         event: ChatTurnEvent,
     ) -> None:
         execution_context.audio_pipeline.cancel()
         if execution_context.summary_task is not None:
             execution_context.summary_task.cancel()
-        self._rollback_user_message(
-            request_context.payload.conversation_id,
-            execution_context.user_message["message_id"],
-        )
+        if execution_context.user_message is not None:
+            self._rollback_user_message(
+                request_context.payload.conversation_id,
+                execution_context.user_message["message_id"],
+            )
         request_context.turn_state_machine.apply(event)
 
     def _build_execution_context(self, request_context: ChatTurnRequestContext) -> ChatTurnExecutionContext:
@@ -267,6 +379,38 @@ class ChatSessionRuntime:
             audio_pipeline=audio_pipeline,
         )
 
+    def _build_image_execution_context(self, request_context: ImageTurnRequestContext) -> ChatTurnExecutionContext:
+        character = get_character(request_context.character_id)
+        dispatcher = ChatEventDispatcher(request_context.websocket)
+        assistant_message_id = new_message_id()
+        request_context.turn_state_machine.bind_message_id(assistant_message_id)
+        system_prompt = request_context.payload.role.strip() if request_context.payload.role else character.system_prompt
+        summary_threshold_chars, summary_max_chars = self._resolve_summary_settings(request_context.payload)
+        selected_style_id = request_context.payload.selected_style_id
+        audio_enabled = self._resolve_audio_enabled(request_context.payload)
+        audio_pipeline = AudioPipeline(
+            dispatcher=dispatcher,
+            assistant_message_id=assistant_message_id,
+            selected_style_id=selected_style_id,
+            audio_enabled=audio_enabled,
+            split_on_soft_boundaries=request_context.payload.tts_split_on_soft_boundaries,
+            tts_client=self.tts_client,
+        )
+
+        return ChatTurnExecutionContext(
+            dispatcher=dispatcher,
+            character=character,
+            user_message=None,
+            assistant_message_id=assistant_message_id,
+            system_prompt=system_prompt,
+            max_history_pairs=0,
+            audio_enabled=audio_enabled,
+            summary_threshold_chars=summary_threshold_chars,
+            summary_max_chars=summary_max_chars,
+            selected_style_id=selected_style_id,
+            audio_pipeline=audio_pipeline,
+        )
+
     def _build_turn_messages(
         self,
         *,
@@ -292,6 +436,13 @@ class ChatSessionRuntime:
             system_prompt,
             recent_messages,
             latest_user_content_override=latest_user_content_override,
+        )
+
+    def _build_image_turn_messages(self, request_context: ImageTurnRequestContext) -> list[dict[str, object]]:
+        return build_character_image_analysis_messages(
+            image_b64=request_context.payload.image_b64,
+            image_format=(request_context.payload.image_format or "jpeg").strip(),
+            role_text=request_context.payload.role,
         )
 
     async def _stream_response(

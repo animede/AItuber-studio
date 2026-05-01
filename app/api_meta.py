@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+import base64
+
+from fastapi import APIRouter, HTTPException
 
 from .character_registry import get_default_character
-from .llm_client import llm_health_status
+from .llm_client import analyze_character_image_snapshot, llm_health_status
+from .conversation_store import conversation_store
+from .schemas import ImageAnalysisRequest
 from .settings import ASSISTANT_SUMMARY_MAX_CHARS, ASSISTANT_SUMMARY_THRESHOLD_CHARS, LLM_MODEL
 from .tts_client import TTSClient
 
@@ -50,3 +54,42 @@ def tts_voices() -> dict:
             "models": [],
             "error": str(exc),
         }
+
+
+@router.post("/image-analysis")
+async def image_analysis(payload: ImageAnalysisRequest) -> dict:
+    conversation = conversation_store.get_conversation(payload.conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    try:
+        analysis = await analyze_character_image_snapshot(
+            image_b64=payload.image_b64,
+            image_format=payload.image_format,
+            role_text=payload.role_text,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"画像解析に失敗しました: {exc}") from exc
+
+    message = conversation_store.append_assistant_message(
+        payload.conversation_id,
+        analysis,
+    )
+
+    audio_b64 = None
+    audio_format = None
+    if payload.audio_enabled:
+        try:
+            audio_bytes = tts_client.synthesize(analysis, payload.selected_style_id)
+        except Exception:
+            audio_bytes = b""
+        if audio_bytes:
+            audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+            audio_format = tts_client.audio_format
+
+    return {
+        "analysis": analysis,
+        "message": message,
+        "audio_b64": audio_b64,
+        "audio_format": audio_format,
+    }

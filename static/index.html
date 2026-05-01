@@ -26,6 +26,32 @@
         <div class="character-visual" id="character-visual">
           <span id="character-avatar-label">も</span>
         </div>
+        <div class="editor-toggle-row">
+          <label class="editor-toggle-primary" for="audio-enabled-toggle">
+            <span class="editor-toggle-primary-title">音声ストリーミング</span>
+            <span class="editor-toggle-primary-control">
+              <input type="checkbox" id="audio-enabled-toggle">
+              <span id="audio-enabled-label">TTS未接続</span>
+            </span>
+          </label>
+          <label class="editor-toggle-secondary" for="tts-split-on-soft-boundaries-toggle">
+            <span class="editor-toggle-secondary-title">TTS区切り</span>
+            <span class="editor-toggle-secondary-control">
+              <input type="checkbox" id="tts-split-on-soft-boundaries-toggle">
+              <span id="tts-split-on-soft-boundaries-label">読点で区切る</span>
+            </span>
+          </label>
+        </div>
+        <div id="character-image-feed-panel" class="image-feed-panel hidden">
+          <img id="character-image-feed-image" class="image-feed-image hidden" alt="取得画像プレビュー">
+          <p id="character-image-feed-empty" class="image-feed-empty">画像URLを入力するとここに表示します。</p>
+        </div>
+        <label class="toggle-field image-feed-toggle-row" for="image-feed-enabled-toggle">
+          <span>取得画像</span>
+          <input type="checkbox" id="image-feed-enabled-toggle">
+          <span id="image-feed-enabled-label">更新しない</span>
+          <button id="image-feed-analyze-button" class="image-feed-analyze-button" type="button">解析</button>
+        </label>
         <div class="character-body">
           <label class="field-label" for="character-select">キャラクター</label>
           <select id="character-select"></select>
@@ -55,27 +81,13 @@
               <input id="character-voice-name-input" type="text" placeholder="もも">
             </div>
             <div class="editor-grid-full">
-              <div class="editor-toggle-row">
-                <label class="editor-toggle-primary" for="audio-enabled-toggle">
-                  <span class="editor-toggle-primary-title">音声ストリーミング</span>
-                  <span class="editor-toggle-primary-control">
-                    <input type="checkbox" id="audio-enabled-toggle">
-                    <span id="audio-enabled-label">TTS未接続</span>
-                  </span>
-                </label>
-                <label class="editor-toggle-secondary" for="tts-split-on-soft-boundaries-toggle">
-                  <span class="editor-toggle-secondary-title">TTS区切り</span>
-                  <span class="editor-toggle-secondary-control">
-                    <input type="checkbox" id="tts-split-on-soft-boundaries-toggle">
-                    <span id="tts-split-on-soft-boundaries-label">読点で区切る</span>
-                  </span>
-                </label>
-              </div>
-            </div>
-            <div class="editor-grid-full">
               <label class="field-label" for="mic-level-threshold-input">無音検出しきい値</label>
               <input id="mic-level-threshold-input" type="number" min="0.001" max="0.2" step="0.001" value="0.03">
               <p class="field-note">現在の入力レベル: <span id="mic-level-readout">0.000</span></p>
+              <label class="checkbox-field" for="mic-auto-off-toggle">
+                <input id="mic-auto-off-toggle" type="checkbox" checked>
+                <span>自動マイクオフ機能有効</span>
+              </label>
             </div>
             <div>
               <label class="field-label" for="character-theme-color-input">テーマ色</label>
@@ -105,7 +117,7 @@
             <div>
               <dt>会話ターン記憶数</dt>
               <dd>
-                <input type="number" id="history-count-input" min="0" max="20" value="10" placeholder="0-20">
+                <input type="number" id="history-count-input" min="0" max="20" value="5" placeholder="0-20">
               </dd>
             </div>
             <div>
@@ -211,16 +223,27 @@
         <div id="chat-visual-stage" class="chat-visual-stage hidden" aria-live="polite">
           <button id="chat-visual-close" class="chat-visual-close" type="button" aria-label="拡大表示を閉じる">×</button>
         </div>
+        <div id="expanded-image-feed-panel" class="image-feed-panel image-feed-panel-expanded hidden">
+          <img id="expanded-image-feed-image" class="image-feed-image hidden" alt="取得画像プレビュー">
+          <p id="expanded-image-feed-empty" class="image-feed-empty">画像URLを入力するとここに表示します。</p>
+        </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div id="error-banner" class="error-banner hidden"></div>
         <form id="composer" class="composer">
           <textarea id="message-input" rows="3" placeholder="ももに話しかけてください"></textarea>
           <div class="composer-actions">
-            <button id="mic-toggle-button" class="mic-toggle-button" type="button" aria-label="マイク入力を切り替える" aria-pressed="false">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M12 15.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 1 0-7 0v6a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 0 1 2 0 8 8 0 0 1-7 7.94V22h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.06A8 8 0 0 1 4 12a1 1 0 1 1 2 0 6 6 0 1 0 12 0Z" fill="currentColor"/>
-              </svg>
-            </button>
+            <div class="composer-icon-actions">
+              <button id="mic-toggle-button" class="mic-toggle-button" type="button" aria-label="マイク入力を切り替える" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 15.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 1 0-7 0v6a3.5 3.5 0 0 0 3.5 3.5Zm6-3.5a1 1 0 0 1 2 0 8 8 0 0 1-7 7.94V22h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.06A8 8 0 0 1 4 12a1 1 0 1 1 2 0 6 6 0 1 0 12 0Z" fill="currentColor"/>
+                </svg>
+              </button>
+              <button id="image-feed-analyze-icon-button" class="image-feed-analyze-icon-button" type="button" aria-label="取得画像を解析する" title="取得画像を解析する">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M8.8 5.5 10 4h4l1.2 1.5H17A2.5 2.5 0 0 1 19.5 8v1.2a1 1 0 0 1-2 0V8a.5.5 0 0 0-.5-.5h-2.75l-1.2-1.5h-2.1l-1.2 1.5H7A.5.5 0 0 0 6.5 8v7A.5.5 0 0 0 7 15.5h5.2a1 1 0 1 1 0 2H7A2.5 2.5 0 0 1 4.5 15V8A2.5 2.5 0 0 1 7 5.5h1.8Zm3.2 3a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm0 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm5.56 4.14 2.15 2.15a1 1 0 0 1-1.42 1.42l-2.15-2.15a1 1 0 1 1 1.42-1.42Z" fill="currentColor"/>
+                </svg>
+              </button>
+            </div>
             <button id="send-button" type="submit">送信</button>
           </div>
           <p id="mic-status-text" class="mic-status-text">マイクOFF</p>

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.llm_client import build_audio_input_content, build_messages
+from app.llm_client import (
+    build_audio_input_content,
+    build_character_image_analysis_messages,
+    build_image_analysis_content,
+    build_messages,
+)
 
 
 class LLMClientMessageBuildTests(unittest.TestCase):
@@ -21,6 +26,34 @@ class LLMClientMessageBuildTests(unittest.TestCase):
 
         self.assertEqual(payload[1]["content"], "こんにちは")
         self.assertEqual(payload[2]["content"], audio_content)
+
+    def test_build_image_analysis_content_wraps_data_url(self) -> None:
+        content = build_image_analysis_content(
+            image_b64="AAA",
+            image_format="jpg",
+            prompt_text="見えているものを教えて",
+        )
+
+        self.assertEqual(content[0], {"type": "text", "text": "見えているものを教えて"})
+        self.assertEqual(
+            content[1],
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,AAA"},
+            },
+        )
+
+    def test_build_character_image_analysis_messages_embeds_role_text(self) -> None:
+        messages = build_character_image_analysis_messages(
+            image_b64="AAA",
+            image_format="jpeg",
+            role_text="名前: もも\n口調: やさしい",
+        )
+
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("名前: もも", messages[0]["content"])
+        self.assertIn("このキャラクタが今見た場面", messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "user")
 
 
 if __name__ == "__main__":

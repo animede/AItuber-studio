@@ -17,6 +17,19 @@ const state = {
   summaryThresholdChars: 150,
   summaryMaxChars: 100,
   micLevelThreshold: 0.03,
+  micAutoOffEnabled: true,
+  imageFeedEnabled: false,
+  imageFeedStatus: "idle",
+  imageFeedCurrentUrl: "",
+  imageFeedRequestPending: false,
+  imageAnalysisPending: false,
+  imageAnalysisText: "",
+  currentImageAnalysisMessageId: null,
+  lastConversationCompletedAt: 0,
+  lastImageAnalysisTriggeredAt: 0,
+  imageFeedStream: null,
+  imageFeedVideoElement: null,
+  imageFeedCanvasElement: null,
   pendingFirstTokenStartedAt: 0,
   firstTokenLatencyMs: null,
   firstTokenMeasuredForTurn: false,
@@ -83,6 +96,7 @@ const state = {
   micRestartLastFailedAt: 0,
   micCurrentLevel: 0,
   micLevelReadoutAt: 0,
+  micLastDetectedInputAt: 0,
 };
 
 const elements = {
@@ -94,7 +108,13 @@ const elements = {
   chatPanel: document.getElementById("chat-panel"),
   characterSelect: document.getElementById("character-select"),
   characterVisual: document.getElementById("character-visual"),
+  characterImageFeedPanel: document.getElementById("character-image-feed-panel"),
+  characterImageFeedImage: document.getElementById("character-image-feed-image"),
+  characterImageFeedEmpty: document.getElementById("character-image-feed-empty"),
   chatVisualStage: document.getElementById("chat-visual-stage"),
+  expandedImageFeedPanel: document.getElementById("expanded-image-feed-panel"),
+  expandedImageFeedImage: document.getElementById("expanded-image-feed-image"),
+  expandedImageFeedEmpty: document.getElementById("expanded-image-feed-empty"),
   chatVisualClose: document.getElementById("chat-visual-close"),
   characterAvatarLabel: document.getElementById("character-avatar-label"),
   characterName: document.getElementById("character-name"),
@@ -104,6 +124,11 @@ const elements = {
   summaryMaxCharsInput: document.getElementById("summary-max-chars-input"),
   micLevelThresholdInput: document.getElementById("mic-level-threshold-input"),
   micLevelReadout: document.getElementById("mic-level-readout"),
+  micAutoOffToggle: document.getElementById("mic-auto-off-toggle"),
+  imageFeedEnabledToggle: document.getElementById("image-feed-enabled-toggle"),
+  imageFeedEnabledLabel: document.getElementById("image-feed-enabled-label"),
+  imageFeedAnalyzeButton: document.getElementById("image-feed-analyze-button"),
+  imageFeedAnalyzeIconButton: document.getElementById("image-feed-analyze-icon-button"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
   audioEnabledLabel: document.getElementById("audio-enabled-label"),
   ttsSplitOnSoftBoundariesToggle: document.getElementById("tts-split-on-soft-boundaries-toggle"),
@@ -168,6 +193,8 @@ const MIC_WARMUP_MS = 800;
 const MIC_START_HINT_MS = 1600;
 const MIC_INACTIVITY_LIMIT_MS = 6000;
 const MIC_RESTART_FAIL_COOLDOWN_MS = 4000;
+const MIC_AUTO_OFF_IDLE_MS = 30 * 1000;
+const AUTO_IMAGE_ANALYSIS_IDLE_MS = 30 * 1000;
 
 const CHARACTER_UPLOAD_TARGETS = [
   {
@@ -226,8 +253,11 @@ async function init() {
   // 初期表示に必要な順で、UI バインド、状態取得、通信確立、会話開始まで進める。
   syncMicrophoneControls();
   syncMicrophoneThresholdControl();
+  syncImageFeedControls();
+  syncImageFeedPanels();
   bindEvents();
   startMicrophoneHealthCheck();
+  startImageFeedPolling();
   await refreshHealth();
   await refreshTtsCatalog();
   await loadCharacters();
@@ -406,6 +436,38 @@ function bindEvents() {
     syncMicrophoneThresholdControl();
   });
 
+  elements.micAutoOffToggle?.addEventListener("change", () => {
+    state.micAutoOffEnabled = Boolean(elements.micAutoOffToggle.checked);
+    if (state.micAutoOffEnabled && state.micRequested) {
+      state.micLastDetectedInputAt = performance.now();
+    }
+  });
+
+  elements.imageFeedEnabledToggle?.addEventListener("change", () => {
+    state.imageFeedEnabled = Boolean(elements.imageFeedEnabledToggle.checked);
+    if (!state.imageFeedEnabled) {
+      state.imageFeedStatus = "idle";
+      state.imageFeedCurrentUrl = "";
+      state.imageFeedRequestPending = false;
+      state.imageAnalysisPending = false;
+      state.imageAnalysisText = "";
+      stopImageFeedCamera();
+      clearImageFeedImages();
+    } else {
+      void refreshImageFeed(true);
+    }
+    syncImageFeedControls();
+    syncImageFeedPanels();
+  });
+
+  elements.imageFeedAnalyzeButton?.addEventListener("click", () => {
+    triggerImageAnalysisFromCurrentImage();
+  });
+
+  elements.imageFeedAnalyzeIconButton?.addEventListener("click", () => {
+    triggerImageAnalysisFromCurrentImage();
+  });
+
   elements.ttsSplitOnSoftBoundariesToggle?.addEventListener("change", () => {
     state.ttsSplitOnSoftBoundaries = Boolean(elements.ttsSplitOnSoftBoundariesToggle.checked);
     syncTtsSegmentControls();
@@ -526,6 +588,15 @@ function extractCharacterName(roleValue, fallbackName) {
 
 function getRoleCharacterName() {
   return extractCharacterName(elements.roleText.value.trim(), "");
+}
+
+function triggerImageAnalysisFromCurrentImage() {
+  const base64Index = state.imageFeedCurrentUrl.indexOf(",");
+  const imageB64 = base64Index >= 0 ? state.imageFeedCurrentUrl.slice(base64Index + 1) : "";
+  if (!imageB64) {
+    return;
+  }
+  void requestImageAnalysis(imageB64, "jpeg");
 }
 
 function syncCharacterNameFieldsFromRole() {
@@ -1493,6 +1564,289 @@ function syncMicrophoneThresholdControl() {
   if (elements.micLevelThresholdInput) {
     elements.micLevelThresholdInput.value = state.micLevelThreshold.toFixed(3);
   }
+  if (elements.micAutoOffToggle) {
+    elements.micAutoOffToggle.checked = state.micAutoOffEnabled;
+  }
+}
+
+function syncImageFeedControls() {
+  if (elements.imageFeedEnabledToggle) {
+    elements.imageFeedEnabledToggle.checked = state.imageFeedEnabled;
+  }
+  if (elements.imageFeedEnabledLabel) {
+    elements.imageFeedEnabledLabel.textContent = state.imageFeedEnabled ? "更新する" : "更新しない";
+  }
+  if (elements.imageFeedAnalyzeButton) {
+    elements.imageFeedAnalyzeButton.disabled = !(
+      state.imageFeedEnabled &&
+      state.currentConversationId &&
+      state.imageFeedCurrentUrl &&
+      !state.imageAnalysisPending &&
+      !state.isStreaming
+    );
+  }
+  if (elements.imageFeedAnalyzeIconButton) {
+    elements.imageFeedAnalyzeIconButton.disabled = !(
+      state.imageFeedEnabled &&
+      state.currentConversationId &&
+      state.imageFeedCurrentUrl &&
+      !state.imageAnalysisPending &&
+      !state.isStreaming
+    );
+  }
+}
+
+function clearImageFeedImages() {
+  [elements.characterImageFeedImage, elements.expandedImageFeedImage].forEach((image) => {
+    if (!image) {
+      return;
+    }
+    image.removeAttribute("src");
+    image.classList.add("hidden");
+  });
+}
+
+function stopImageFeedCamera() {
+  if (state.imageFeedStream) {
+    for (const track of state.imageFeedStream.getTracks()) {
+      track.stop();
+    }
+    state.imageFeedStream = null;
+  }
+  if (state.imageFeedVideoElement) {
+    state.imageFeedVideoElement.pause();
+    state.imageFeedVideoElement.srcObject = null;
+    state.imageFeedVideoElement = null;
+  }
+  state.imageFeedCanvasElement = null;
+}
+
+async function ensureImageFeedCamera() {
+  if (state.imageFeedStream && state.imageFeedVideoElement && state.imageFeedCanvasElement) {
+    return true;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    state.imageFeedStatus = "error";
+    syncImageFeedPanels();
+    return false;
+  }
+
+  state.imageFeedStatus = "loading";
+  syncImageFeedPanels();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false,
+    });
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.srcObject = stream;
+    await new Promise((resolve, reject) => {
+      const handleLoadedMetadata = () => {
+        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        resolve();
+      };
+      const handleError = () => {
+        video.removeEventListener("error", handleError);
+        reject(new Error("カメラ映像を初期化できませんでした。"));
+      };
+      video.addEventListener("loadedmetadata", handleLoadedMetadata);
+      video.addEventListener("error", handleError, { once: true });
+    });
+    await video.play();
+
+    const canvas = document.createElement("canvas");
+    state.imageFeedStream = stream;
+    state.imageFeedVideoElement = video;
+    state.imageFeedCanvasElement = canvas;
+    return true;
+  } catch (error) {
+    stopImageFeedCamera();
+    state.imageFeedStatus = "error";
+    syncImageFeedPanels();
+    console.warn("image feed camera init failed", error);
+    return false;
+  }
+}
+
+function getImageFeedEmptyMessage() {
+  if (!state.imageFeedEnabled) {
+    return "取得画像を有効にするとここに表示します。";
+  }
+  if (state.imageFeedStatus === "error") {
+    return "既定カメラを取得できません。ブラウザの権限設定を確認してください。";
+  }
+  if (state.imageFeedStatus === "loading") {
+    return "既定カメラを準備中...";
+  }
+  return "カメラ画像を更新待ちです。";
+}
+
+function syncImageFeedPanels() {
+  const showNormalPanel = state.imageFeedEnabled && !state.isCharacterVisualExpanded;
+  const showExpandedPanel = state.imageFeedEnabled && state.isCharacterVisualExpanded;
+  const showImage = state.imageFeedStatus === "ready" && Boolean(state.imageFeedCurrentUrl);
+  const message = getImageFeedEmptyMessage();
+
+  if (elements.characterImageFeedPanel) {
+    elements.characterImageFeedPanel.classList.toggle("hidden", !showNormalPanel);
+  }
+  if (elements.expandedImageFeedPanel) {
+    elements.expandedImageFeedPanel.classList.toggle("hidden", !showExpandedPanel);
+  }
+  if (elements.characterImageFeedImage) {
+    elements.characterImageFeedImage.classList.toggle("hidden", !showImage);
+  }
+  if (elements.expandedImageFeedImage) {
+    elements.expandedImageFeedImage.classList.toggle("hidden", !showImage);
+  }
+  if (elements.characterImageFeedEmpty) {
+    elements.characterImageFeedEmpty.textContent = message;
+    elements.characterImageFeedEmpty.classList.toggle("hidden", showImage);
+  }
+  if (elements.expandedImageFeedEmpty) {
+    elements.expandedImageFeedEmpty.textContent = message;
+    elements.expandedImageFeedEmpty.classList.toggle("hidden", showImage);
+  }
+  syncImageFeedControls();
+}
+
+async function refreshImageFeed(force = false) {
+  if (!state.imageFeedEnabled) {
+    state.imageFeedStatus = "idle";
+    state.imageFeedCurrentUrl = "";
+    state.imageAnalysisPending = false;
+    state.imageAnalysisText = "";
+    stopImageFeedCamera();
+    clearImageFeedImages();
+    syncImageFeedPanels();
+    return;
+  }
+
+  if (state.isStreaming || state.imageAnalysisPending || (!force && state.imageFeedRequestPending)) {
+    return;
+  }
+
+  state.imageFeedRequestPending = true;
+  const ready = await ensureImageFeedCamera();
+  if (!ready || !state.imageFeedVideoElement || !state.imageFeedCanvasElement) {
+    state.imageFeedRequestPending = false;
+    return;
+  }
+
+  const video = state.imageFeedVideoElement;
+  const canvas = state.imageFeedCanvasElement;
+  const width = video.videoWidth || 640;
+  const height = video.videoHeight || 480;
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    state.imageFeedRequestPending = false;
+    state.imageFeedStatus = "error";
+    syncImageFeedPanels();
+    return;
+  }
+
+  context.drawImage(video, 0, 0, width, height);
+  const nextUrl = canvas.toDataURL("image/jpeg", 0.88);
+  state.imageFeedCurrentUrl = nextUrl;
+  state.imageFeedStatus = "ready";
+  state.imageFeedRequestPending = false;
+
+  if (elements.characterImageFeedImage) {
+    elements.characterImageFeedImage.src = nextUrl;
+  }
+  if (elements.expandedImageFeedImage) {
+    elements.expandedImageFeedImage.src = nextUrl;
+  }
+  syncImageFeedPanels();
+
+}
+
+async function requestImageAnalysis(imageB64, imageFormat) {
+  if (!state.imageFeedEnabled || state.isStreaming || state.imageAnalysisPending) {
+    return;
+  }
+
+  const audioEnabled = state.ttsAvailable && Boolean(elements.audioEnabledToggle?.checked);
+  if (!beginOutgoingTurn({ userContent: "画像解析", audioEnabled, showUserMessage: false })) {
+    return;
+  }
+
+  state.lastImageAnalysisTriggeredAt = performance.now();
+  state.imageAnalysisPending = true;
+  state.currentImageAnalysisMessageId = null;
+  state.imageAnalysisText = "";
+  syncImageFeedPanels();
+
+  try {
+    await connectWebSocket();
+    if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket接続を利用できません。");
+    }
+
+    state.socket.send(
+      JSON.stringify({
+        action: "image_analysis",
+        conversation_id: state.currentConversationId,
+        role: elements.roleText?.value?.trim() || null,
+        summary_threshold_chars: parseSummaryThresholdChars(),
+        summary_max_chars: parseSummaryMaxChars(),
+        audio_enabled: audioEnabled,
+        tts_split_on_soft_boundaries: state.ttsSplitOnSoftBoundaries,
+        selected_style_id: state.selectedTtsStyleId,
+        image_b64: imageB64,
+        image_format: imageFormat,
+      })
+    );
+  } catch (error) {
+    state.imageAnalysisText = error.message || "画像解析に失敗しました。";
+    state.imageAnalysisPending = false;
+    state.currentImageAnalysisMessageId = null;
+    finalizeStreamingError();
+  } finally {
+    syncImageFeedPanels();
+  }
+}
+
+function startImageFeedPolling() {
+  window.setInterval(() => {
+    void refreshImageFeed().finally(() => {
+      maybeAutoTriggerImageAnalysis();
+    });
+  }, 1000);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void refreshImageFeed(true).finally(() => {
+        maybeAutoTriggerImageAnalysis();
+      });
+    }
+  });
+}
+
+function maybeAutoTriggerImageAnalysis() {
+  if (
+    !state.imageFeedEnabled ||
+    state.isStreaming ||
+    state.imageAnalysisPending ||
+    !state.currentConversationId ||
+    !state.imageFeedCurrentUrl
+  ) {
+    return;
+  }
+
+  const referenceAt = Math.max(state.lastConversationCompletedAt, state.lastImageAnalysisTriggeredAt);
+  if (referenceAt <= 0 || performance.now() - referenceAt < AUTO_IMAGE_ANALYSIS_IDLE_MS) {
+    return;
+  }
+
+  triggerImageAnalysisFromCurrentImage();
 }
 
 function syncTtsSegmentControls() {
@@ -1956,6 +2310,7 @@ function renderCharacterPanel() {
   syncCharacterPanel();
   // 左の小表示と右の拡大表示で、常に同じ見た目ソースを使う。
   renderExpandedCharacterVisual();
+  syncImageFeedPanels();
   syncYouTubeControls();
 }
 
@@ -2047,6 +2402,7 @@ function renderExpandedCharacterVisual() {
   elements.chatPanel.classList.toggle("media-expanded", state.isCharacterVisualExpanded);
   // hidden クラスで通常時はステージ全体をレイアウトから外す。
   stage.classList.toggle("hidden", !state.isCharacterVisualExpanded);
+  syncImageFeedPanels();
 
   if (!state.isCharacterVisualExpanded) {
     return;
@@ -2114,6 +2470,8 @@ async function startConversation(characterId) {
   state.currentConversationId = data.conversation_id;
   state.currentCharacterId = data.character.id;
   state.messages = data.messages.map((message) => ({ ...message, status: "done" }));
+  state.lastConversationCompletedAt = 0;
+  state.lastImageAnalysisTriggeredAt = 0;
   elements.characterSelect.value = state.currentCharacterId;
   // 会話を作り直した直後は、まだそのターンの音声再生は始まっていない。
   state.currentTurnAudioEnabled = false;
@@ -2145,6 +2503,8 @@ async function clearConversation() {
   const data = await response.json();
   state.currentConversationId = data.new_conversation_id;
   state.messages = data.messages.map((message) => ({ ...message, status: "done" }));
+  state.lastConversationCompletedAt = 0;
+  state.lastImageAnalysisTriggeredAt = 0;
   renderMessages();
   if (shouldRestartYouTube && previousConversationId !== state.currentConversationId) {
     await stopYouTubeComments(previousConversationId);
@@ -2208,7 +2568,7 @@ function updateMessageContent(messageId, content, status = "pending") {
 
 async function sendChatMessageText(message) {
   const roleText = elements.roleText.value.trim();
-  const historyCount = Number(elements.historyCountInput.value || 10);
+  const historyCount = Number(elements.historyCountInput.value || 5);
   // TTS の実利用可否と、UI トグルの両方を見てそのターンの音声有無を決める。
   const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
   if (!beginOutgoingTurn({ userContent: message, audioEnabled })) {
@@ -2243,7 +2603,7 @@ async function sendChatMessageText(message) {
 
 async function sendChatMessageAudio(audioBase64, audioFormat) {
   const roleText = elements.roleText.value.trim();
-  const historyCount = Number(elements.historyCountInput.value || 10);
+  const historyCount = Number(elements.historyCountInput.value || 5);
   const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
   if (!audioBase64 || !beginOutgoingTurn({ userContent: "音声入力", audioEnabled })) {
     return;
@@ -2277,8 +2637,8 @@ async function sendChatMessageAudio(audioBase64, audioFormat) {
   }
 }
 
-function beginOutgoingTurn({ userContent, audioEnabled }) {
-  if (!userContent || state.isStreaming || !state.currentConversationId) {
+function beginOutgoingTurn({ userContent, audioEnabled, showUserMessage = true }) {
+  if ((showUserMessage && !userContent) || state.isStreaming || !state.currentConversationId) {
     // 空送信、二重送信、会話未作成のいずれも送信しない。
     return false;
   }
@@ -2303,13 +2663,15 @@ function beginOutgoingTurn({ userContent, audioEnabled }) {
   syncCharacterVisualMode();
   setComposerDisabled(true);
 
-  appendMessage({
-    message_id: `local_user_${Date.now()}`,
-    role: "user",
-    content: userContent,
-    timestamp: new Date().toISOString(),
-    status: "done",
-  });
+  if (showUserMessage) {
+    appendMessage({
+      message_id: `local_user_${Date.now()}`,
+      role: "user",
+      content: userContent,
+      timestamp: new Date().toISOString(),
+      status: "done",
+    });
+  }
   return true;
 }
 
@@ -2379,6 +2741,7 @@ async function toggleMicrophoneCapture() {
 
   state.micRequested = true;
   state.micStartHintUntil = performance.now() + MIC_START_HINT_MS;
+  state.micLastDetectedInputAt = performance.now();
   syncMicrophoneControls();
   try {
     await ensureMicrophoneCapture();
@@ -2458,6 +2821,7 @@ function stopMicrophoneCapture({ preserveRequested } = { preserveRequested: fals
   state.micCaptureStartedAt = 0;
   state.micWarmupUntil = 0;
   state.micStartHintUntil = 0;
+  state.micLastDetectedInputAt = 0;
 
   if (state.micProcessorNode) {
     state.micProcessorNode.onaudioprocess = null;
@@ -2576,6 +2940,15 @@ function startMicrophoneHealthCheck() {
     if (!state.micRequested || state.isStreaming || state.micSegmentSending) {
       return;
     }
+    if (
+      state.micAutoOffEnabled &&
+      state.micLastDetectedInputAt > 0 &&
+      performance.now() - state.micLastDetectedInputAt >= MIC_AUTO_OFF_IDLE_MS
+    ) {
+      stopMicrophoneCapture({ preserveRequested: false });
+      syncMicrophoneControls();
+      return;
+    }
     if (isMicrophoneCaptureHealthy()) {
       return;
     }
@@ -2636,6 +3009,7 @@ function handleMicrophoneAudioProcess(event) {
     state.micSegmentActive = true;
     state.micSpeechStartedAt = now;
     state.micLastSpeechAt = now;
+  state.micLastDetectedInputAt = now;
     state.micSegmentBuffers = [...state.micPreRollBuffers, frame];
     state.micPreRollBuffers = [];
     syncMicrophoneControls();
@@ -2645,6 +3019,7 @@ function handleMicrophoneAudioProcess(event) {
   state.micSegmentBuffers.push(frame);
   if (level >= state.micLevelThreshold) {
     state.micLastSpeechAt = now;
+    state.micLastDetectedInputAt = now;
     return;
   }
   if (now - state.micLastSpeechAt < MIC_SILENCE_HOLD_MS) {
@@ -2759,6 +3134,11 @@ function handleSocketEvent(event) {
       status: "pending",
     };
     state.currentAssistantMessageId = event.message_id;
+    if (state.imageAnalysisPending) {
+      state.currentImageAnalysisMessageId = event.message_id;
+      state.imageAnalysisText = "";
+      syncImageFeedPanels();
+    }
     appendMessage(assistantMessage);
     return;
   }
@@ -2771,6 +3151,10 @@ function handleSocketEvent(event) {
     }
     // 受信したテキストは即描画せずキューへ積み、一定テンポで流す。
     state.renderQueue.push(...Array.from(event.delta));
+    if (state.currentImageAnalysisMessageId && event.message_id === state.currentImageAnalysisMessageId) {
+      state.imageAnalysisText += event.delta;
+      syncImageFeedPanels();
+    }
     if (!state.renderLoopRunning) {
       startRenderLoop();
     }
@@ -2953,6 +3337,14 @@ function finishTurnIfReady() {
     return;
   }
   state.isStreaming = false;
+  state.lastConversationCompletedAt = performance.now();
+  if (state.currentImageAnalysisMessageId && state.currentAssistantMessageId === state.currentImageAnalysisMessageId) {
+    const message = state.messages.find((item) => item.message_id === state.currentImageAnalysisMessageId);
+    state.imageAnalysisText = message?.content || state.imageAnalysisText;
+    state.imageAnalysisPending = false;
+    state.currentImageAnalysisMessageId = null;
+    syncImageFeedPanels();
+  }
   state.currentAssistantMessageId = null;
   state.textStreamEnded = false;
   state.turnEnded = false;
@@ -2971,6 +3363,11 @@ function finalizeStreamingError() {
     }
   }
   state.isStreaming = false;
+  if (state.imageAnalysisPending) {
+    state.imageAnalysisPending = false;
+    state.currentImageAnalysisMessageId = null;
+    syncImageFeedPanels();
+  }
   state.renderQueue = [];
   state.textStreamEnded = false;
   state.turnEnded = false;

@@ -9,10 +9,10 @@ from pydantic import ValidationError
 from .chat_event_dispatcher import ChatEventDispatcher
 from .character_registry import get_character, get_default_character
 from .robot_controller import RobotController
-from .chat_session_runtime import ChatSessionRuntime, ChatTurnRequestContext
+from .chat_session_runtime import ChatSessionRuntime, ChatTurnRequestContext, ImageTurnRequestContext
 from .chat_turn_state_machine import ChatTurnEvent, ChatTurnStateMachine
 from .conversation_store import ConversationRecord, conversation_store
-from .schemas import ChatStreamRequest, ConversationCreateRequest
+from .schemas import ChatStreamRequest, ConversationCreateRequest, ImageAnalysisStreamRequest
 from .tts_client import TTSClient
 
 
@@ -33,15 +33,16 @@ class ValidatedChatRequest:
     message_text: str
 
 
+@dataclass(frozen=True)
+class ValidatedImageAnalysisRequest:
+    payload: ImageAnalysisStreamRequest
+    character_id: str
+
+
 async def validate_chat_request(
     dispatcher: ChatEventDispatcher,
     raw_payload: dict,
 ) -> ValidatedChatRequest | None:
-    action = raw_payload.get("action")
-    if action != "chat":
-        await dispatcher.send_error("未対応のアクションです。")
-        return None
-
     try:
         payload = ChatStreamRequest.model_validate(raw_payload)
     except ValidationError as exc:
@@ -71,6 +72,28 @@ async def validate_chat_request(
         payload=payload,
         character_id=conversation["character_id"],
         message_text=message_text,
+    )
+
+
+async def validate_image_analysis_request(
+    dispatcher: ChatEventDispatcher,
+    raw_payload: dict,
+) -> ValidatedImageAnalysisRequest | None:
+    try:
+        payload = ImageAnalysisStreamRequest.model_validate(raw_payload)
+    except ValidationError as exc:
+        logger.warning("invalid image analysis payload: %s payload=%s", exc, raw_payload)
+        await dispatcher.send_error("メッセージ形式が不正です。")
+        return None
+
+    conversation = conversation_store.get_conversation(payload.conversation_id)
+    if not conversation:
+        await dispatcher.send_error("Conversation not found")
+        return None
+
+    return ValidatedImageAnalysisRequest(
+        payload=payload,
+        character_id=conversation["character_id"],
     )
 
 
@@ -144,26 +167,56 @@ async def chat_websocket(websocket: WebSocket) -> None:
             await dispatcher.send_error("不正なJSONを受信しました。")
             continue
 
-        validated = await validate_chat_request(dispatcher, raw_payload)
-        if not validated:
-            continue
+        action = raw_payload.get("action")
 
         try:
-            payload = validated.payload
-            turn_state_machine = ChatTurnStateMachine(
-                conversation_id=payload.conversation_id,
-                on_state_changed=robot_controller.notify_state_change,
-            )
-            turn_state_machine.apply(ChatTurnEvent.USER_MESSAGE_RECEIVED)
-            turn_state_machine.apply(ChatTurnEvent.REQUEST_VALIDATED)
-            await chat_session_runtime.execute_turn(
-                ChatTurnRequestContext(
-                    websocket=websocket,
-                    payload=payload,
-                    character_id=validated.character_id,
-                    message_text=validated.message_text,
-                    turn_state_machine=turn_state_machine,
+            if action == "chat":
+                validated = await validate_chat_request(dispatcher, raw_payload)
+                if not validated:
+                    continue
+
+                payload = validated.payload
+                turn_state_machine = ChatTurnStateMachine(
+                    conversation_id=payload.conversation_id,
+                    on_state_changed=robot_controller.notify_state_change,
                 )
-            )
+                turn_state_machine.apply(ChatTurnEvent.USER_MESSAGE_RECEIVED)
+                turn_state_machine.apply(ChatTurnEvent.REQUEST_VALIDATED)
+                await chat_session_runtime.execute_turn(
+                    ChatTurnRequestContext(
+                        websocket=websocket,
+                        payload=payload,
+                        character_id=validated.character_id,
+                        message_text=validated.message_text,
+                        turn_state_machine=turn_state_machine,
+                    )
+                )
+                continue
+
+            if action == "image_analysis":
+                validated = await validate_image_analysis_request(dispatcher, raw_payload)
+                if not validated:
+                    continue
+
+                payload = validated.payload
+                turn_state_machine = ChatTurnStateMachine(
+                    conversation_id=payload.conversation_id,
+                    on_state_changed=robot_controller.notify_state_change,
+                )
+                turn_state_machine.apply(ChatTurnEvent.USER_MESSAGE_RECEIVED)
+                turn_state_machine.apply(ChatTurnEvent.REQUEST_VALIDATED)
+                await chat_session_runtime.execute_image_turn(
+                    ImageTurnRequestContext(
+                        websocket=websocket,
+                        payload=payload,
+                        character_id=validated.character_id,
+                        turn_state_machine=turn_state_machine,
+                    )
+                )
+                continue
+
+            await dispatcher.send_error("未対応のアクションです。")
+            continue
+
         except WebSocketDisconnect:
             break
