@@ -93,6 +93,7 @@ ObserverCallback = Callable[[ConversationObservation], Awaitable[list[Background
 
 @dataclass
 class IdleFollowupState:
+    # 自己発話の判定に必要な最小状態だけを会話ごとに保持する。
     last_user_activity_at: str | None = None
     last_user_message: str | None = None
     last_assistant_message: str | None = None
@@ -159,6 +160,7 @@ class IdleFollowupProducer(ProposalProducer):
         state = self._state_by_conversation.setdefault(observation.conversation_id, IdleFollowupState())
 
         if observation.kind is ObservationKind.USER_MESSAGE:
+            # アイドル判定は最後のユーザー入力だけを基準に進める。
             state.last_user_activity_at = observation.created_at
             state.last_user_message = str(observation.payload.get("text") or "").strip() or None
             emit_background_followup_log(
@@ -169,6 +171,7 @@ class IdleFollowupProducer(ProposalProducer):
         if observation.kind is ObservationKind.ASSISTANT_MESSAGE:
             state.last_assistant_message = str(observation.payload.get("text") or "").strip() or None
             if observation.payload.get("source") == "background_agent":
+                # クールダウンは proposal 作成時ではなく、実際の自己発話完了時から始める。
                 state.last_proposal_at = observation.created_at
                 emit_background_followup_log(
                     f"[background-followup] completed conversation_id={observation.conversation_id} at={observation.created_at} text={(state.last_assistant_message or '')[:80]!r}"
@@ -176,6 +179,7 @@ class IdleFollowupProducer(ProposalProducer):
             return []
 
         if observation.kind is ObservationKind.VLM_EVENT:
+            # 画像内容は follow-up の話題候補には使うが、アイドル起点は更新しない。
             state.last_image_analysis_text = str(observation.payload.get("text") or "").strip() or None
             return []
 
@@ -197,6 +201,7 @@ class IdleFollowupProducer(ProposalProducer):
             if cooldown_elapsed_seconds < self.cooldown_seconds:
                 return []
 
+        # 直近コンテキストを payload に載せて、実行側で自然な follow-up を生成する。
         emit_background_followup_log(
             f"[background-followup] proposal created conversation_id={observation.conversation_id} elapsed={elapsed_seconds:.1f}s at={observation.created_at}"
         )

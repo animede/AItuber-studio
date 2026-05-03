@@ -1598,6 +1598,7 @@ async function sendBackgroundFollowupMode() {
     });
     return;
   }
+  // 直後の未対応エラーだけは、この切り替え要求に紐づくものとして扱う。
   state.backgroundFollowupModeSentAt = Date.now();
   logBackgroundFollowup("send mode", {
     conversationId: state.currentConversationId,

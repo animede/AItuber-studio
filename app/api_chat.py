@@ -185,6 +185,7 @@ async def activate_background_followup_conversation(
     if not conversation["messages"]:
         return
 
+    # モード有効化直後でも、直近 user 発話から待機時間を再開できるように復元する。
     last_user_message = next(
         (message for message in reversed(conversation["messages"]) if message["role"] == "user"),
         None,
@@ -241,6 +242,7 @@ async def execute_background_followup(
 
     message_id = new_message_id()
     audio_enabled = tts_client.has_live_engine()
+    # 背景自己発話も通常ターンと同じ audio event 形式でフロントへ流す。
     audio_pipeline = AudioPipeline(
         dispatcher=dispatcher,
         assistant_message_id=message_id,
@@ -290,6 +292,7 @@ async def process_background_agent_tick(
             background_agent_manager.close_session(conversation_id)
             continue
 
+        # WebSocket の receive timeout を 1 秒 tick として使い、自己発話候補だけを回収する。
         await background_agent_manager.observe(
             ConversationObservation(
                 conversation_id=conversation_id,
