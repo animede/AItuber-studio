@@ -203,6 +203,8 @@ const MIC_RESTART_FAIL_COOLDOWN_MS = 4000;
 const MIC_AUTO_OFF_IDLE_MS = 30 * 1000;
 const AUTO_IMAGE_ANALYSIS_IDLE_MS = 30 * 1000;
 const TTS_RETRY_INTERVAL_MS = 5000;
+const RASPBERRY_PI_MIC_LEVEL_THRESHOLD = 0.1;
+const RASPBERRY_PI_IMAGE_RESIZE_RATIO = 0.25;
 
 const CHARACTER_UPLOAD_TARGETS = [
   {
@@ -509,6 +511,9 @@ function bindEvents() {
 
   elements.imageAnalysisRaspberryPiToggle?.addEventListener("change", () => {
     state.imageAnalysisRaspberryPiOptimized = Boolean(elements.imageAnalysisRaspberryPiToggle.checked);
+    if (state.imageAnalysisRaspberryPiOptimized) {
+      applyRaspberryPiOptimizationPreset();
+    }
     syncImageFeedControls();
   });
 
@@ -1661,6 +1666,23 @@ function syncImageFeedControls() {
       !state.imageAnalysisPending &&
       !state.isStreaming
     );
+  }
+}
+
+function applyRaspberryPiOptimizationPreset() {
+  state.imageAnalysisFastModeEnabled = true;
+  state.audioStreamingEnabled = true;
+  state.ttsSplitOnSoftBoundaries = true;
+  state.micLevelThreshold = RASPBERRY_PI_MIC_LEVEL_THRESHOLD;
+  state.imageFeedResizeRatio = RASPBERRY_PI_IMAGE_RESIZE_RATIO;
+
+  syncMicrophoneThresholdControl();
+  syncImageFeedControls();
+  syncTtsAvailability();
+  syncTtsSegmentControls();
+
+  if (state.imageFeedEnabled) {
+    void refreshImageFeed(true);
   }
 }
 
