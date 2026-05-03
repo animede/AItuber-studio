@@ -20,6 +20,7 @@ const state = {
   micAutoOffEnabled: true,
   imageFeedEnabled: false,
   imageFeedResizeRatio: 1,
+  imageAnalysisFastModeEnabled: false,
   imageFeedStatus: "idle",
   imageFeedCurrentUrl: "",
   imageFeedRequestPending: false,
@@ -129,6 +130,7 @@ const elements = {
   imageFeedEnabledToggle: document.getElementById("image-feed-enabled-toggle"),
   imageFeedEnabledLabel: document.getElementById("image-feed-enabled-label"),
   imageFeedResizeSelect: document.getElementById("image-feed-resize-select"),
+  imageAnalysisFastToggle: document.getElementById("image-analysis-fast-toggle"),
   imageFeedAnalyzeButton: document.getElementById("image-feed-analyze-button"),
   imageFeedAnalyzeIconButton: document.getElementById("image-feed-analyze-icon-button"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
@@ -468,6 +470,11 @@ function bindEvents() {
     if (state.imageFeedEnabled) {
       void refreshImageFeed(true);
     }
+    syncImageFeedControls();
+  });
+
+  elements.imageAnalysisFastToggle?.addEventListener("change", () => {
+    state.imageAnalysisFastModeEnabled = Boolean(elements.imageAnalysisFastToggle.checked);
     syncImageFeedControls();
   });
 
@@ -1590,6 +1597,9 @@ function syncImageFeedControls() {
   if (elements.imageFeedResizeSelect) {
     elements.imageFeedResizeSelect.value = String(state.imageFeedResizeRatio);
   }
+  if (elements.imageAnalysisFastToggle) {
+    elements.imageAnalysisFastToggle.checked = state.imageAnalysisFastModeEnabled;
+  }
   if (elements.imageFeedAnalyzeButton) {
     elements.imageFeedAnalyzeButton.disabled = !(
       state.imageFeedEnabled &&
@@ -1885,6 +1895,7 @@ async function requestImageAnalysis(imageB64, imageFormat) {
         summary_threshold_chars: parseSummaryThresholdChars(),
         summary_max_chars: parseSummaryMaxChars(),
         audio_enabled: audioEnabled,
+        fast_image_analysis: state.imageAnalysisFastModeEnabled,
         tts_split_on_soft_boundaries: state.ttsSplitOnSoftBoundaries,
         selected_style_id: state.selectedTtsStyleId,
         image_b64: imageB64,

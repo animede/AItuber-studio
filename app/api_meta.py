@@ -5,7 +5,12 @@ import base64
 from fastapi import APIRouter, HTTPException
 
 from .character_registry import get_default_character
-from .llm_client import analyze_character_image_snapshot, llm_health_status
+from .llm_client import (
+    analyze_character_image_snapshot,
+    analyze_character_image_snapshot_fast,
+    llm_display_model_name,
+    llm_health_status,
+)
 from .conversation_store import conversation_store
 from .schemas import ImageAnalysisRequest
 from .settings import ASSISTANT_SUMMARY_MAX_CHARS, ASSISTANT_SUMMARY_THRESHOLD_CHARS, LLM_MODEL
@@ -21,10 +26,12 @@ def health() -> dict:
     default_character = get_default_character()
     llm_status = llm_health_status()
     tts_status = tts_client.get_status()
+    display_model = llm_display_model_name()
     return {
         "status": "ok",
         "llm_status": llm_status,
-        "model": LLM_MODEL,
+        "model": display_model,
+        "configured_model": LLM_MODEL,
         "summary_threshold_chars": ASSISTANT_SUMMARY_THRESHOLD_CHARS,
         "summary_max_chars": ASSISTANT_SUMMARY_MAX_CHARS,
         "default_character_id": default_character.id,
@@ -63,11 +70,17 @@ async def image_analysis(payload: ImageAnalysisRequest) -> dict:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     try:
-        analysis = await analyze_character_image_snapshot(
-            image_b64=payload.image_b64,
-            image_format=payload.image_format,
-            role_text=payload.role_text,
-        )
+        if payload.fast_image_analysis:
+            analysis = await analyze_character_image_snapshot_fast(
+                image_b64=payload.image_b64,
+                role_text=payload.role_text,
+            )
+        else:
+            analysis = await analyze_character_image_snapshot(
+                image_b64=payload.image_b64,
+                image_format=payload.image_format,
+                role_text=payload.role_text,
+            )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"画像解析に失敗しました: {exc}") from exc
 

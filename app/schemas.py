@@ -79,6 +79,7 @@ class ImageAnalysisStreamRequest(BaseModel):
     summary_threshold_chars: int | None = Field(default=None, ge=0, le=4000)
     summary_max_chars: int | None = Field(default=None, ge=1, le=2000)
     audio_enabled: bool = False
+    fast_image_analysis: bool = False
     tts_split_on_soft_boundaries: bool = False
     selected_style_id: int | None = None
     image_b64: str = Field(min_length=1)
@@ -113,6 +114,7 @@ class ImageAnalysisRequest(BaseModel):
     image_format: str = Field(default="jpeg", min_length=1)
     role_text: str | None = None
     audio_enabled: bool = False
+    fast_image_analysis: bool = False
     selected_style_id: int | None = None
 
     @field_validator("conversation_id", "image_b64", "image_format", "role_text", mode="before")

@@ -13,7 +13,9 @@ from .character_registry import CharacterDefinition, get_character
 from .chat_turn_state_machine import ChatTurnEvent, ChatTurnStateMachine
 from .conversation_store import ConversationStore, MessageRecord, MessageRole, new_message_id
 from .llm_client import (
+    analyze_image_snapshot_fast,
     build_audio_input_content,
+    build_character_fast_image_analysis_messages,
     build_character_image_analysis_messages,
     build_messages,
     stream_chat_chunks,
@@ -107,7 +109,7 @@ class ChatSessionRuntime:
         execution_context = self._build_image_execution_context(request_context)
 
         try:
-            llm_messages = self._build_image_turn_messages(request_context)
+            llm_messages = await self._build_image_turn_messages(request_context)
             await self._start_generic_turn(
                 conversation_id=request_context.payload.conversation_id,
                 character_id=execution_context.character.id,
@@ -438,7 +440,16 @@ class ChatSessionRuntime:
             latest_user_content_override=latest_user_content_override,
         )
 
-    def _build_image_turn_messages(self, request_context: ImageTurnRequestContext) -> list[dict[str, object]]:
+    async def _build_image_turn_messages(self, request_context: ImageTurnRequestContext) -> list[dict[str, object]]:
+        if request_context.payload.fast_image_analysis:
+            scene_description_en = await analyze_image_snapshot_fast(
+                image_b64=request_context.payload.image_b64,
+            )
+            return build_character_fast_image_analysis_messages(
+                scene_description_en=scene_description_en,
+                role_text=request_context.payload.role,
+            )
+
         return build_character_image_analysis_messages(
             image_b64=request_context.payload.image_b64,
             image_format=(request_context.payload.image_format or "jpeg").strip(),

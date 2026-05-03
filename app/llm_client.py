@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import urllib.error
 import urllib.request
@@ -7,7 +9,16 @@ import urllib.request
 from openai import AsyncOpenAI
 
 from .conversation_store import MessageRecord
-from .settings import ASSISTANT_SUMMARY_MAX_CHARS, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, OPENAI_TIMEOUT_SECONDS
+from .settings import (
+    ASSISTANT_SUMMARY_MAX_CHARS,
+    FAST_IMAGE_ANALYSIS_BASE_URL,
+    FAST_IMAGE_ANALYSIS_MODEL,
+    FAST_IMAGE_ANALYSIS_TIMEOUT_SECONDS,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
+    OPENAI_TIMEOUT_SECONDS,
+)
 
 
 MessageContent = str | list[dict[str, object]]
@@ -88,6 +99,83 @@ def build_image_analysis_content(
         }
     )
     return content
+
+
+def build_character_fast_image_analysis_messages(
+    *,
+    scene_description_en: str,
+    role_text: str | None,
+) -> list[dict[str, object]]:
+    normalized_role_text = (role_text or "").strip()
+    system_prompt = (
+        "あなたはカメラ画像を見たキャラクタ本人として話します。"
+        "英語の観察メモを参考にしつつ、見えている内容だけを日本語で自然に説明してください。"
+        "翻訳していること、英語メモ、モデル名、解析という言葉は出さないでください。"
+        "推測は最小限に留め、2文以内で返してください。"
+        "説明本文のみを返してください。"
+    )
+    if normalized_role_text:
+        system_prompt = (
+            "以下のキャラクター設定に必ず従って話してください。\n"
+            f"{normalized_role_text}\n\n"
+            "英語の観察メモを参考にしつつ、このキャラクタが今見た場面として日本語で自然に説明してください。"
+            "翻訳していること、英語メモ、モデル名、解析という言葉は出さないでください。"
+            "見えている内容を優先し、推測は最小限に留め、2文以内で返してください。"
+            "説明本文のみを返してください。"
+        )
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                "Use the following English observation notes as the only visual reference. "
+                "Respond in natural Japanese as the character.\n\n"
+                f"Observation notes:\n{scene_description_en.strip()}"
+            ),
+        },
+    ]
+
+
+def _ollama_image_analysis_sync(*, image_b64: str) -> str:
+    payload = {
+        "model": FAST_IMAGE_ANALYSIS_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Describe this image in plain English. "
+                    "Mention only clearly visible objects and the scene in one or two short sentences."
+                ),
+                "images": [image_b64],
+            }
+        ],
+        "stream": False,
+    }
+    request = urllib.request.Request(
+        f"{FAST_IMAGE_ANALYSIS_BASE_URL.rstrip('/')}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=FAST_IMAGE_ANALYSIS_TIMEOUT_SECONDS) as response:
+            body = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"高速画像解析リクエストが失敗しました: HTTP {exc.code} {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"高速画像解析サーバへ接続できませんでした: {exc}") from exc
+
+    message = body.get("message") if isinstance(body, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    normalized_content = (content or "").strip()
+    if not normalized_content:
+        raise RuntimeError("高速画像解析サーバから説明文を取得できませんでした。")
+    return normalized_content
+
+
+async def analyze_image_snapshot_fast(*, image_b64: str) -> str:
+    return await asyncio.to_thread(_ollama_image_analysis_sync, image_b64=image_b64)
 
 
 async def stream_chat_chunks(messages: list[dict]):
@@ -222,6 +310,26 @@ async def analyze_character_image_snapshot(
     return (completion.choices[0].message.content or "").strip()
 
 
+async def analyze_character_image_snapshot_fast(
+    *,
+    image_b64: str,
+    role_text: str | None = None,
+) -> str:
+    scene_description_en = await analyze_image_snapshot_fast(image_b64=image_b64)
+    client = create_async_client()
+    completion = await client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=build_character_fast_image_analysis_messages(
+            scene_description_en=scene_description_en,
+            role_text=role_text,
+        ),
+        max_tokens=120,
+        temperature=0.2,
+        stream=False,
+    )
+    return (completion.choices[0].message.content or "").strip()
+
+
 async def romanize_japanese_name(name_text: str) -> str:
     client = create_async_client()
     completion = await client.chat.completions.create(
@@ -261,3 +369,25 @@ def llm_health_status() -> str:
     except (urllib.error.URLError, TimeoutError, ValueError):
         return "error"
     return "error"
+
+
+def llm_display_model_name() -> str:
+    models_url = f"{LLM_BASE_URL.rstrip('/')}/models"
+    request = urllib.request.Request(models_url, headers={"Authorization": f"Bearer {LLM_API_KEY}"})
+    try:
+      with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return LLM_MODEL
+
+    models = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return LLM_MODEL
+
+    configured_model = (LLM_MODEL or "").strip()
+    available_model_ids = [item.get("id") for item in models if isinstance(item, dict) and item.get("id")]
+    if configured_model and configured_model in available_model_ids:
+        return configured_model
+    if available_model_ids:
+        return str(available_model_ids[0])
+    return LLM_MODEL
