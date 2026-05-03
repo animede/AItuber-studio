@@ -71,9 +71,10 @@ async def image_analysis(payload: ImageAnalysisRequest) -> dict:
 
     try:
         if payload.fast_image_analysis:
+            role_text = payload.role_text or get_default_character().system_prompt
             analysis = await analyze_character_image_snapshot_fast(
                 image_b64=payload.image_b64,
-                role_text=payload.role_text,
+                system_prompt=role_text,
             )
         else:
             analysis = await analyze_character_image_snapshot(

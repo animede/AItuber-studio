@@ -103,35 +103,19 @@ def build_image_analysis_content(
 
 def build_character_fast_image_analysis_messages(
     *,
+    system_prompt: str,
     scene_description_en: str,
-    role_text: str | None,
 ) -> list[dict[str, object]]:
-    normalized_role_text = (role_text or "").strip()
-    system_prompt = (
-        "あなたはカメラ画像を見たキャラクタ本人として話します。"
-        "英語の観察メモを参考にしつつ、見えている内容だけを日本語で自然に説明してください。"
-        "翻訳していること、英語メモ、モデル名、解析という言葉は出さないでください。"
-        "推測は最小限に留め、2文以内で返してください。"
-        "説明本文のみを返してください。"
-    )
-    if normalized_role_text:
-        system_prompt = (
-            "以下のキャラクター設定に必ず従って話してください。\n"
-            f"{normalized_role_text}\n\n"
-            "英語の観察メモを参考にしつつ、このキャラクタが今見た場面として日本語で自然に説明してください。"
-            "翻訳していること、英語メモ、モデル名、解析という言葉は出さないでください。"
-            "見えている内容を優先し、推測は最小限に留め、2文以内で返してください。"
-            "説明本文のみを返してください。"
-        )
-
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_prompt.strip()},
         {
             "role": "user",
             "content": (
-                "Use the following English observation notes as the only visual reference. "
-                "Respond in natural Japanese as the character.\n\n"
-                f"Observation notes:\n{scene_description_en.strip()}"
+                "次の英語の観察メモは、いま見えている画像の内容を簡潔に記したものです。"
+                "この内容だけを視覚情報として使い、あなた自身が今見た場面として日本語で自然に話してください。"
+                "翻訳していること、英語メモ、モデル名、解析という言葉は出さないでください。"
+                "見えている内容を優先し、推測は最小限に留め、2文以内で答えてください。\n\n"
+                f"英語の観察メモ:\n{scene_description_en.strip()}"
             ),
         },
     ]
@@ -313,15 +297,15 @@ async def analyze_character_image_snapshot(
 async def analyze_character_image_snapshot_fast(
     *,
     image_b64: str,
-    role_text: str | None = None,
+    system_prompt: str,
 ) -> str:
     scene_description_en = await analyze_image_snapshot_fast(image_b64=image_b64)
     client = create_async_client()
     completion = await client.chat.completions.create(
         model=LLM_MODEL,
         messages=build_character_fast_image_analysis_messages(
+            system_prompt=system_prompt,
             scene_description_en=scene_description_en,
-            role_text=role_text,
         ),
         max_tokens=120,
         temperature=0.2,

@@ -446,8 +446,8 @@ class ChatSessionRuntime:
                 image_b64=request_context.payload.image_b64,
             )
             return build_character_fast_image_analysis_messages(
+                system_prompt=get_character(request_context.character_id).system_prompt,
                 scene_description_en=scene_description_en,
-                role_text=request_context.payload.role,
             )
 
         return build_character_image_analysis_messages(

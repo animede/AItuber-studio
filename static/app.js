@@ -44,6 +44,7 @@ const state = {
   socket: null,
   socketReady: null,
   ttsAvailable: false,
+  audioStreamingEnabled: false,
   ttsStatus: null,
   ttsCatalog: null,
   selectedTtsStyleId: null,
@@ -199,6 +200,7 @@ const MIC_INACTIVITY_LIMIT_MS = 6000;
 const MIC_RESTART_FAIL_COOLDOWN_MS = 4000;
 const MIC_AUTO_OFF_IDLE_MS = 30 * 1000;
 const AUTO_IMAGE_ANALYSIS_IDLE_MS = 30 * 1000;
+const TTS_RETRY_INTERVAL_MS = 5000;
 
 const CHARACTER_UPLOAD_TARGETS = [
   {
@@ -262,12 +264,37 @@ async function init() {
   bindEvents();
   startMicrophoneHealthCheck();
   startImageFeedPolling();
-  await refreshHealth();
-  await refreshTtsCatalog();
+  startTtsAvailabilityPolling();
+  await refreshTtsState();
   await loadCharacters();
   await connectWebSocket();
   await startConversation(state.currentCharacterId);
   syncYouTubeControls();
+}
+
+function shouldRetryTtsAvailability() {
+  return !state.ttsAvailable || !state.ttsCatalog || state.ttsCatalog.available === false;
+}
+
+async function refreshTtsState({ silent = false } = {}) {
+  await refreshHealth({ silent });
+  await refreshTtsCatalog({ silent });
+}
+
+function startTtsAvailabilityPolling() {
+  window.setInterval(() => {
+    if (document.visibilityState === "hidden" || !shouldRetryTtsAvailability()) {
+      return;
+    }
+    void refreshTtsState({ silent: true });
+  }, TTS_RETRY_INTERVAL_MS);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !shouldRetryTtsAvailability()) {
+      return;
+    }
+    void refreshTtsState({ silent: true });
+  });
 }
 
 function getWebSocketUrl() {
@@ -476,6 +503,11 @@ function bindEvents() {
   elements.imageAnalysisFastToggle?.addEventListener("change", () => {
     state.imageAnalysisFastModeEnabled = Boolean(elements.imageAnalysisFastToggle.checked);
     syncImageFeedControls();
+  });
+
+  elements.audioEnabledToggle?.addEventListener("change", () => {
+    state.audioStreamingEnabled = Boolean(elements.audioEnabledToggle.checked) && state.ttsAvailable;
+    syncTtsAvailability();
   });
 
   elements.imageFeedAnalyzeButton?.addEventListener("click", () => {
@@ -1521,7 +1553,7 @@ function connectWebSocket() {
   return state.socketReady;
 }
 
-async function refreshHealth() {
+async function refreshHealth({ silent = false } = {}) {
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
@@ -1541,7 +1573,9 @@ async function refreshHealth() {
   } catch (error) {
     state.serverStatus = "error";
     updateServerStatus();
-    showError("バックエンドまたはLLMサーバに接続できません。");
+    if (!silent) {
+      showError("バックエンドまたはLLMサーバに接続できません。");
+    }
   }
 }
 
@@ -1870,7 +1904,7 @@ async function requestImageAnalysis(imageB64, imageFormat) {
     return;
   }
 
-  const audioEnabled = state.ttsAvailable && Boolean(elements.audioEnabledToggle?.checked);
+  const audioEnabled = state.ttsAvailable && state.audioStreamingEnabled;
   if (!beginOutgoingTurn({ userContent: "画像解析", audioEnabled, showUserMessage: false })) {
     return;
   }
@@ -1957,7 +1991,7 @@ function syncTtsSegmentControls() {
   }
 }
 
-async function refreshTtsCatalog() {
+async function refreshTtsCatalog({ silent = false } = {}) {
   try {
     const response = await fetch("/api/tts/voices");
     const data = await response.json();
@@ -1966,6 +2000,9 @@ async function refreshTtsCatalog() {
   } catch (error) {
     state.ttsCatalog = null;
     state.selectedTtsStyleId = null;
+    if (!silent) {
+      console.warn("tts catalog fetch failed", error);
+    }
   }
   syncTtsAvailability();
   renderTtsPanel();
@@ -1995,6 +2032,7 @@ function syncTtsAvailability() {
   elements.audioEnabledToggle.disabled = !state.ttsAvailable;
   if (!state.ttsAvailable) {
     // TTS 未接続時はトグル自体を無効化して text-only に固定する。
+    state.audioStreamingEnabled = false;
     elements.audioEnabledToggle.checked = false;
     elements.audioEnabledLabel.textContent = "TTS未接続";
     if (elements.ttsSplitOnSoftBoundariesToggle) {
@@ -2005,8 +2043,9 @@ function syncTtsAvailability() {
 
   if (wasDisabled) {
     // 後から catalog が取れた場合は、自動で音声利用可能な状態へ復帰させる。
-    elements.audioEnabledToggle.checked = true;
+    state.audioStreamingEnabled = true;
   }
+  elements.audioEnabledToggle.checked = state.audioStreamingEnabled;
   if (elements.ttsSplitOnSoftBoundariesToggle) {
     elements.ttsSplitOnSoftBoundariesToggle.disabled = false;
   }
@@ -2668,7 +2707,7 @@ async function sendChatMessageText(message) {
   const roleText = elements.roleText.value.trim();
   const historyCount = Number(elements.historyCountInput.value || 5);
   // TTS の実利用可否と、UI トグルの両方を見てそのターンの音声有無を決める。
-  const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
+  const audioEnabled = state.ttsAvailable && state.audioStreamingEnabled;
   if (!beginOutgoingTurn({ userContent: message, audioEnabled })) {
     return;
   }
@@ -2702,7 +2741,7 @@ async function sendChatMessageText(message) {
 async function sendChatMessageAudio(audioBase64, audioFormat) {
   const roleText = elements.roleText.value.trim();
   const historyCount = Number(elements.historyCountInput.value || 5);
-  const audioEnabled = state.ttsAvailable && elements.audioEnabledToggle.checked;
+  const audioEnabled = state.ttsAvailable && state.audioStreamingEnabled;
   if (!audioBase64 || !beginOutgoingTurn({ userContent: "音声入力", audioEnabled })) {
     return;
   }
