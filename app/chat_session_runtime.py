@@ -16,6 +16,7 @@ from .llm_client import (
     analyze_image_snapshot_fast,
     build_audio_input_content,
     build_character_fast_image_analysis_messages,
+    build_image_analysis_client_config,
     build_character_image_analysis_messages,
     build_messages,
     stream_chat_chunks,
@@ -110,6 +111,12 @@ class ChatSessionRuntime:
 
         try:
             llm_messages = await self._build_image_turn_messages(request_context)
+            llm_base_url = None
+            llm_model = None
+            if not request_context.payload.fast_image_analysis and request_context.payload.raspberry_pi_optimized:
+                llm_base_url, llm_model = build_image_analysis_client_config(
+                    raspberry_pi_optimized=True,
+                )
             await self._start_generic_turn(
                 conversation_id=request_context.payload.conversation_id,
                 character_id=execution_context.character.id,
@@ -128,6 +135,8 @@ class ChatSessionRuntime:
                 audio_pipeline=execution_context.audio_pipeline,
                 audio_enabled=execution_context.audio_enabled,
                 llm_messages=llm_messages,
+                llm_base_url=llm_base_url,
+                llm_model=llm_model,
             )
             await self._finish_generic_turn(
                 conversation_id=request_context.payload.conversation_id,
@@ -237,6 +246,8 @@ class ChatSessionRuntime:
         audio_pipeline: AudioPipeline,
         audio_enabled: bool,
         llm_messages: list[dict],
+        llm_base_url: str | None = None,
+        llm_model: str | None = None,
     ) -> str:
         async def handle_first_chunk() -> None:
             turn_state_machine.apply(ChatTurnEvent.LLM_FIRST_CHUNK_RECEIVED)
@@ -251,6 +262,8 @@ class ChatSessionRuntime:
             conversation_id=conversation_id,
             message_id=message_id,
             messages=llm_messages,
+            base_url=llm_base_url,
+            model=llm_model,
             on_chunk=handle_stream_chunk,
             on_first_chunk=handle_first_chunk,
         )
@@ -462,6 +475,8 @@ class ChatSessionRuntime:
         conversation_id: str,
         message_id: str,
         messages: list[dict],
+        base_url: str | None = None,
+        model: str | None = None,
         on_chunk: ChunkCallback,
         on_first_chunk: FirstChunkCallback | None = None,
     ) -> str:
@@ -469,7 +484,7 @@ class ChatSessionRuntime:
         request_started_at = time.perf_counter()
         first_chunk_seen = False
 
-        async for chunk in stream_chat_chunks(messages):
+        async for chunk in stream_chat_chunks(messages, base_url=base_url, model=model):
             if not first_chunk_seen:
                 first_chunk_seen = True
                 log_llm_first_chunk_timing(

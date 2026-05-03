@@ -667,6 +667,11 @@ body {
   font-size: 0.82rem;
 }
 
+.image-feed-raspberrypi-row {
+  margin: 4px 4px 0;
+  font-size: 0.82rem;
+}
+
 .image-feed-analysis {
   margin: 6px 4px 0;
   color: var(--muted);

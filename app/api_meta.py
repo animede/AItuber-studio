@@ -81,6 +81,7 @@ async def image_analysis(payload: ImageAnalysisRequest) -> dict:
                 image_b64=payload.image_b64,
                 image_format=payload.image_format,
                 role_text=payload.role_text,
+                raspberry_pi_optimized=payload.raspberry_pi_optimized,
             )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"画像解析に失敗しました: {exc}") from exc

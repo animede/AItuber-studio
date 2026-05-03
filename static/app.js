@@ -21,6 +21,7 @@ const state = {
   imageFeedEnabled: false,
   imageFeedResizeRatio: 1,
   imageAnalysisFastModeEnabled: false,
+  imageAnalysisRaspberryPiOptimized: false,
   imageFeedStatus: "idle",
   imageFeedCurrentUrl: "",
   imageFeedRequestPending: false,
@@ -132,6 +133,7 @@ const elements = {
   imageFeedEnabledLabel: document.getElementById("image-feed-enabled-label"),
   imageFeedResizeSelect: document.getElementById("image-feed-resize-select"),
   imageAnalysisFastToggle: document.getElementById("image-analysis-fast-toggle"),
+  imageAnalysisRaspberryPiToggle: document.getElementById("image-analysis-raspberrypi-toggle"),
   imageFeedAnalyzeButton: document.getElementById("image-feed-analyze-button"),
   imageFeedAnalyzeIconButton: document.getElementById("image-feed-analyze-icon-button"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
@@ -502,6 +504,11 @@ function bindEvents() {
 
   elements.imageAnalysisFastToggle?.addEventListener("change", () => {
     state.imageAnalysisFastModeEnabled = Boolean(elements.imageAnalysisFastToggle.checked);
+    syncImageFeedControls();
+  });
+
+  elements.imageAnalysisRaspberryPiToggle?.addEventListener("change", () => {
+    state.imageAnalysisRaspberryPiOptimized = Boolean(elements.imageAnalysisRaspberryPiToggle.checked);
     syncImageFeedControls();
   });
 
@@ -1634,6 +1641,9 @@ function syncImageFeedControls() {
   if (elements.imageAnalysisFastToggle) {
     elements.imageAnalysisFastToggle.checked = state.imageAnalysisFastModeEnabled;
   }
+  if (elements.imageAnalysisRaspberryPiToggle) {
+    elements.imageAnalysisRaspberryPiToggle.checked = state.imageAnalysisRaspberryPiOptimized;
+  }
   if (elements.imageFeedAnalyzeButton) {
     elements.imageFeedAnalyzeButton.disabled = !(
       state.imageFeedEnabled &&
@@ -1930,6 +1940,7 @@ async function requestImageAnalysis(imageB64, imageFormat) {
         summary_max_chars: parseSummaryMaxChars(),
         audio_enabled: audioEnabled,
         fast_image_analysis: state.imageAnalysisFastModeEnabled,
+        raspberry_pi_optimized: state.imageAnalysisRaspberryPiOptimized,
         tts_split_on_soft_boundaries: state.ttsSplitOnSoftBoundaries,
         selected_style_id: state.selectedTtsStyleId,
         image_b64: imageB64,

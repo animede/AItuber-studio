@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from openai import AsyncOpenAI
@@ -18,18 +19,26 @@ from .settings import (
     LLM_BASE_URL,
     LLM_MODEL,
     OPENAI_TIMEOUT_SECONDS,
+    RASPBERRY_PI_IMAGE_ANALYSIS_BASE_URL,
+    RASPBERRY_PI_IMAGE_ANALYSIS_MODEL,
 )
 
 
 MessageContent = str | list[dict[str, object]]
 
 
-def create_async_client() -> AsyncOpenAI:
+def create_async_client(*, base_url: str | None = None) -> AsyncOpenAI:
     return AsyncOpenAI(
-        base_url=LLM_BASE_URL,
+        base_url=base_url or LLM_BASE_URL,
         api_key=LLM_API_KEY,
         timeout=OPENAI_TIMEOUT_SECONDS,
     )
+
+
+def build_image_analysis_client_config(*, raspberry_pi_optimized: bool) -> tuple[str, str]:
+    if raspberry_pi_optimized:
+        return RASPBERRY_PI_IMAGE_ANALYSIS_BASE_URL, RASPBERRY_PI_IMAGE_ANALYSIS_MODEL
+    return LLM_BASE_URL, LLM_MODEL
 
 
 def sanitize_registration_name(value: str) -> str:
@@ -162,10 +171,15 @@ async def analyze_image_snapshot_fast(*, image_b64: str) -> str:
     return await asyncio.to_thread(_ollama_image_analysis_sync, image_b64=image_b64)
 
 
-async def stream_chat_chunks(messages: list[dict]):
-    client = create_async_client()
+async def stream_chat_chunks(
+    messages: list[dict],
+    *,
+    base_url: str | None = None,
+    model: str | None = None,
+):
+    client = create_async_client(base_url=base_url)
     stream = await client.chat.completions.create(
-        model=LLM_MODEL,
+        model=model or LLM_MODEL,
         messages=messages,
         max_tokens=400,
         temperature=0.7,
@@ -278,10 +292,14 @@ async def analyze_character_image_snapshot(
     image_b64: str,
     image_format: str = "jpeg",
     role_text: str | None = None,
+    raspberry_pi_optimized: bool = False,
 ) -> str:
-    client = create_async_client()
+    base_url, model = build_image_analysis_client_config(
+        raspberry_pi_optimized=raspberry_pi_optimized,
+    )
+    client = create_async_client(base_url=base_url)
     completion = await client.chat.completions.create(
-        model=LLM_MODEL,
+        model=model,
         messages=build_character_image_analysis_messages(
             image_b64=image_b64,
             image_format=image_format,
