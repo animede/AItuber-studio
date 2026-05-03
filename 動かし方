@@ -10,11 +10,16 @@ OpenAI 互換の会話 LLM は 8080 で起動しておく。
 
 llama-server -hf unsloth/gemma-4-E4B-it-GGUF:Q4_K_M --reasoning off --host 0.0.0.0 --port 8080
 
+
+./build/bin/llama-server -hf unsloth/gemma-4-E4B-it-GGUF:Q4_K_M --reasoning off --host 0.0.0.0 --port 8080 --threads 4 --mmproj /home/animede/llama.cpp/models/mmproj-BF16.gguf
+
 ***ollama / 画像解析***
 
 高速画像解析を使う場合は Ollama を起動し、moondream を入れておく。
 
 ollama pull moondream
+or
+ollama run moondream
 
 既定では以下を使う。
 - FAST_IMAGE_ANALYSIS_BASE_URL=http://127.0.0.1:11434
@@ -26,7 +31,7 @@ curl -s http://127.0.0.1:11434/api/tags
 
 
 ***アプリ***
-source /home/animede/AI-character/.venv/bin/activate
+source /home/animede/AItuber-studio/.venv/bin/activate
 cd /home/animede/AItuber-studio
 python webapp_main.py
 
@@ -43,10 +48,19 @@ FAST_IMAGE_ANALYSIS_BASE_URL=http://127.0.0.1:11434 \
 FAST_IMAGE_ANALYSIS_MODEL=moondream:latest \
 /home/animede/AItuber-studio/.venv/bin/python webapp_main.py
 
+自己発話エージェントの待機秒数とクールダウン秒数を短くする例:
+
+BACKGROUND_IDLE_FOLLOWUP_SECONDS=12 \
+BACKGROUND_IDLE_FOLLOWUP_COOLDOWN_SECONDS=20 \
+/home/animede/AItuber-studio/.venv/bin/python webapp_main.py
+
 ***補足***
 
 - UI の「TTS区切り」を ON にすると、句点だけでなく読点でも短く区切って読み上げる
 - マイクボタンを ON にすると、ブラウザ側で無音検出して発話区間ごとに LLM へ送る
 - 画像取得を ON にして「高速画像解析」を ON にすると、Ollama の moondream で画像内容だけを先に読む
 - 画像解析の最終応答は、通常の会話モデル側で日本語化しつつキャラ口調に整える
+- 自己発話エージェントの待機秒数は最後のユーザー入力を起点に `BACKGROUND_IDLE_FOLLOWUP_SECONDS` で変えられる
+- 自己発話後のクールダウン秒数は `BACKGROUND_IDLE_FOLLOWUP_COOLDOWN_SECONDS` で変えられる
+- TTS が接続されていれば、自己発話も音声応答として再生される
 - backend の schema や WebSocket payload を変更したあとに「メッセージ形式が不正です。」が出る場合は、まずサーバー再起動を確認する

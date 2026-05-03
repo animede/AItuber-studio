@@ -6,6 +6,7 @@ from app.background_agent import (
     BackgroundAgentManager,
     BackgroundProposal,
     ConversationObservation,
+    IdleFollowupProducer,
     ObservationKind,
     ProposalKind,
     ProposalPriority,
@@ -83,6 +84,206 @@ class BackgroundAgentTests(unittest.IsolatedAsyncioTestCase):
 
         drained = await manager.drain_proposals("conv_test")
         self.assertEqual(drained, [])
+
+    async def test_idle_followup_producer_uses_last_image_analysis(self) -> None:
+        manager = BackgroundAgentManager(
+            proposal_producers=[IdleFollowupProducer(idle_seconds=5, cooldown_seconds=10)],
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.USER_MESSAGE,
+                payload={"text": "what do you see?"},
+                created_at="2026-05-03T10:00:00+00:00",
+            )
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.VLM_EVENT,
+                payload={"text": "a red mug on a desk"},
+                created_at="2026-05-03T10:00:03+00:00",
+            )
+        )
+
+        proposals = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:06+00:00",
+            )
+        )
+
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].kind, ProposalKind.FOLLOW_UP_MESSAGE)
+        self.assertEqual(proposals[0].payload["last_image_analysis_text"], "a red mug on a desk")
+
+    async def test_idle_followup_producer_respects_cooldown(self) -> None:
+        manager = BackgroundAgentManager(
+            proposal_producers=[IdleFollowupProducer(idle_seconds=5, cooldown_seconds=10)],
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.USER_MESSAGE,
+                payload={"text": "hello"},
+                created_at="2026-05-03T10:00:00+00:00",
+            )
+        )
+
+        first = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:06+00:00",
+            )
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.ASSISTANT_MESSAGE,
+                payload={"text": "follow-up", "source": "background_agent"},
+                created_at="2026-05-03T10:00:07+00:00",
+            )
+        )
+
+        second = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:08+00:00",
+            )
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+
+    async def test_idle_followup_cooldown_starts_after_background_message(self) -> None:
+        manager = BackgroundAgentManager(
+            proposal_producers=[IdleFollowupProducer(idle_seconds=5, cooldown_seconds=10)],
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.USER_MESSAGE,
+                payload={"text": "hello"},
+                created_at="2026-05-03T10:00:00+00:00",
+            )
+        )
+
+        first = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:06+00:00",
+            )
+        )
+        second = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:07+00:00",
+            )
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.ASSISTANT_MESSAGE,
+                payload={"text": "follow-up", "source": "background_agent"},
+                created_at="2026-05-03T10:00:08+00:00",
+            )
+        )
+
+        third = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:12+00:00",
+            )
+        )
+
+        self.assertEqual(third, [])
+
+    async def test_idle_followup_ignores_assistant_and_image_events_for_idle_anchor(self) -> None:
+        manager = BackgroundAgentManager(
+            proposal_producers=[IdleFollowupProducer(idle_seconds=5, cooldown_seconds=10)],
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.USER_MESSAGE,
+                payload={"text": "hello"},
+                created_at="2026-05-03T10:00:00+00:00",
+            )
+        )
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.ASSISTANT_MESSAGE,
+                payload={"text": "hi there"},
+                created_at="2026-05-03T10:00:03+00:00",
+            )
+        )
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.VLM_EVENT,
+                payload={"text": "a red mug on a desk"},
+                created_at="2026-05-03T10:00:04+00:00",
+            )
+        )
+
+        proposals = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:06+00:00",
+            )
+        )
+
+        self.assertEqual(len(proposals), 1)
+
+    async def test_idle_followup_requires_user_activity(self) -> None:
+        manager = BackgroundAgentManager(
+            proposal_producers=[IdleFollowupProducer(idle_seconds=5, cooldown_seconds=10)],
+        )
+
+        await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.ASSISTANT_MESSAGE,
+                payload={"text": "initial greeting"},
+                created_at="2026-05-03T10:00:00+00:00",
+            )
+        )
+
+        proposals = await manager.observe(
+            ConversationObservation(
+                conversation_id="conv_test",
+                kind=ObservationKind.TIMER,
+                payload={},
+                created_at="2026-05-03T10:00:06+00:00",
+            )
+        )
+
+        self.assertEqual(proposals, [])
 
 
 if __name__ == "__main__":

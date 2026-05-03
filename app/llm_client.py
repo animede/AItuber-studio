@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from .conversation_store import MessageRecord
 from .settings import (
     ASSISTANT_SUMMARY_MAX_CHARS,
+    BACKGROUND_IDLE_MAX_HISTORY_MESSAGES,
     FAST_IMAGE_ANALYSIS_BASE_URL,
     FAST_IMAGE_ANALYSIS_MODEL,
     FAST_IMAGE_ANALYSIS_TIMEOUT_SECONDS,
@@ -220,6 +221,43 @@ async def summarize_assistant_response(response_text: str, *, max_chars: int = A
     if len(summary) <= max_chars:
         return summary
     return summary[:max_chars].rstrip()
+
+
+async def generate_idle_followup(
+    *,
+    system_prompt: str,
+    messages: list[MessageRecord],
+    last_image_analysis_text: str | None = None,
+) -> str:
+    client = create_async_client()
+    trimmed_messages = messages[-BACKGROUND_IDLE_MAX_HISTORY_MESSAGES:]
+    idle_instruction = (
+        "相手からしばらく返事が無いので、直前までの会話の流れを踏まえて、"
+        "あなた自身が自然に続けて話したくなる短いひとことだけを日本語で返してください。"
+        "1文から2文まで、押しつけがましくせず、質問攻めにしないでください。"
+        "前置きや説明、箇条書きは禁止です。"
+    )
+    if last_image_analysis_text:
+        idle_instruction += (
+            "最後に見えていた画像について触れる場合は、次の情報だけを根拠に自然に触れてください: "
+            f"{last_image_analysis_text.strip()}"
+        )
+
+    completion = await client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt.strip()},
+            *[
+                {"role": message["role"], "content": message["content"]}
+                for message in trimmed_messages
+            ],
+            {"role": "user", "content": idle_instruction},
+        ],
+        max_tokens=120,
+        temperature=0.8,
+        stream=False,
+    )
+    return (completion.choices[0].message.content or "").strip()
 
 
 async def analyze_image_snapshot(*, image_b64: str, image_format: str = "jpeg") -> str:

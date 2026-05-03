@@ -22,6 +22,8 @@ const state = {
   imageFeedResizeRatio: 1,
   imageAnalysisFastModeEnabled: false,
   imageAnalysisRaspberryPiOptimized: false,
+  backgroundFollowupEnabled: false,
+  backgroundFollowupModeSentAt: 0,
   imageFeedStatus: "idle",
   imageFeedCurrentUrl: "",
   imageFeedRequestPending: false,
@@ -103,6 +105,14 @@ const state = {
   micLastDetectedInputAt: 0,
 };
 
+function logBackgroundFollowup(message, payload = null) {
+  if (payload === null) {
+    console.info(`[background-followup] ${message}`);
+    return;
+  }
+  console.info(`[background-followup] ${message}`, payload);
+}
+
 const elements = {
   // DOM 参照を先に束ね、各関数で毎回 query しないようにする。
   serverStatus: document.getElementById("server-status"),
@@ -134,6 +144,7 @@ const elements = {
   imageFeedResizeSelect: document.getElementById("image-feed-resize-select"),
   imageAnalysisFastToggle: document.getElementById("image-analysis-fast-toggle"),
   imageAnalysisRaspberryPiToggle: document.getElementById("image-analysis-raspberrypi-toggle"),
+  backgroundFollowupEnabledToggle: document.getElementById("background-followup-enabled-toggle"),
   imageFeedAnalyzeButton: document.getElementById("image-feed-analyze-button"),
   imageFeedAnalyzeIconButton: document.getElementById("image-feed-analyze-icon-button"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
@@ -515,6 +526,12 @@ function bindEvents() {
       applyRaspberryPiOptimizationPreset();
     }
     syncImageFeedControls();
+  });
+
+  elements.backgroundFollowupEnabledToggle?.addEventListener("change", () => {
+    state.backgroundFollowupEnabled = Boolean(elements.backgroundFollowupEnabledToggle.checked);
+    syncBackgroundFollowupControls();
+    void sendBackgroundFollowupMode();
   });
 
   elements.audioEnabledToggle?.addEventListener("change", () => {
@@ -1525,6 +1542,13 @@ function connectWebSocket() {
 
     socket.addEventListener("open", () => {
       state.socket = socket;
+      logBackgroundFollowup("websocket open", {
+        conversationId: state.currentConversationId,
+        enabled: state.backgroundFollowupEnabled,
+      });
+      if (state.backgroundFollowupEnabled) {
+        void sendBackgroundFollowupMode();
+      }
       settled = true;
       resolve();
     });
@@ -1563,6 +1587,29 @@ function connectWebSocket() {
   });
 
   return state.socketReady;
+}
+
+async function sendBackgroundFollowupMode() {
+  await connectWebSocket();
+  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+    logBackgroundFollowup("mode send skipped: socket not open", {
+      conversationId: state.currentConversationId,
+      enabled: state.backgroundFollowupEnabled,
+    });
+    return;
+  }
+  state.backgroundFollowupModeSentAt = Date.now();
+  logBackgroundFollowup("send mode", {
+    conversationId: state.currentConversationId,
+    enabled: state.backgroundFollowupEnabled,
+  });
+  state.socket.send(
+    JSON.stringify({
+      action: "background_followup_mode",
+      enabled: state.backgroundFollowupEnabled,
+      conversation_id: state.currentConversationId,
+    })
+  );
 }
 
 async function refreshHealth({ silent = false } = {}) {
@@ -1666,6 +1713,12 @@ function syncImageFeedControls() {
       !state.imageAnalysisPending &&
       !state.isStreaming
     );
+  }
+}
+
+function syncBackgroundFollowupControls() {
+  if (elements.backgroundFollowupEnabledToggle) {
+    elements.backgroundFollowupEnabledToggle.checked = state.backgroundFollowupEnabled;
   }
 }
 
@@ -2656,6 +2709,9 @@ async function startConversation(characterId) {
   } else {
     syncYouTubeControls();
   }
+  if (state.backgroundFollowupEnabled) {
+    void sendBackgroundFollowupMode();
+  }
 }
 
 async function clearConversation() {
@@ -2683,6 +2739,9 @@ async function clearConversation() {
     await startYouTubeComments();
   } else {
     syncYouTubeControls();
+  }
+  if (state.backgroundFollowupEnabled) {
+    void sendBackgroundFollowupMode();
   }
 }
 
@@ -3292,6 +3351,25 @@ function arrayBufferToBase64(buffer) {
 
 function handleSocketEvent(event) {
   if (event.type === "start") {
+    if (!state.isStreaming) {
+      hideError();
+      resetAudioPlayback();
+      if (state.micRequested && state.micCaptureActive) {
+        stopMicrophoneCapture({ preserveRequested: true });
+      }
+      state.isStreaming = true;
+      state.renderQueue = [];
+      state.textStreamEnded = false;
+      state.turnEnded = false;
+      state.pendingFirstTokenStartedAt = 0;
+      state.firstTokenLatencyMs = null;
+      state.firstTokenMeasuredForTurn = false;
+      setComposerDisabled(true);
+      logBackgroundFollowup("received server-initiated start", {
+        messageId: event.message_id,
+        audioEnabled: Boolean(event.audio_enabled),
+      });
+    }
     // assistant ターンの開始点。プレースホルダ吹き出しと音声キューを作り直す。
     state.audioQueue = [];
     state.currentTurnAudioEnabled = Boolean(event.audio_enabled);
@@ -3338,6 +3416,9 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "text_end") {
+    if (state.backgroundFollowupEnabled) {
+      logBackgroundFollowup("received text_end", { messageId: event.message_id });
+    }
     // 本文の生成完了。描画キューが空になったら吹き出しを確定する。
     state.textStreamEnded = true;
     finishTextStreamingIfReady();
@@ -3345,6 +3426,12 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "end") {
+    if (state.backgroundFollowupEnabled) {
+      logBackgroundFollowup("received end", {
+        messageId: event.message_id,
+        finishReason: event.finish_reason,
+      });
+    }
     // end は、そのターン全体の終了。本文描画完了後に入力を再度開放する。
     state.turnEnded = true;
     finishTurnIfReady();
@@ -3352,11 +3439,25 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "error") {
+    if (
+      event.error === "未対応のアクションです。" &&
+      state.backgroundFollowupModeSentAt > 0 &&
+      Date.now() - state.backgroundFollowupModeSentAt < 3000
+    ) {
+      state.backgroundFollowupModeSentAt = 0;
+      state.backgroundFollowupEnabled = false;
+      syncBackgroundFollowupControls();
+      logBackgroundFollowup("server does not support mode switch");
+      showError("このバックエンドは自発話エージェント切り替えに未対応です。サーバを再起動して最新コードを読み込んでください。");
+      return;
+    }
     if (event.fatal === false) {
       // TTS 側の軽微な失敗はログだけ残して会話自体は継続する。
       console.warn(event.stage || "stream", event.error || "音声処理エラー");
       return;
     }
+    state.backgroundFollowupModeSentAt = 0;
+    logBackgroundFollowup("received error", event);
     showError(event.error || "ストリーム処理でエラーが発生しました。");
     finalizeStreamingError();
   }

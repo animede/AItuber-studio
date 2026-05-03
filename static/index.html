@@ -42,41 +42,54 @@
             </span>
           </label>
         </div>
-        <div id="character-image-feed-panel" class="image-feed-panel hidden">
-          <img id="character-image-feed-image" class="image-feed-image hidden" alt="取得画像プレビュー">
-          <p id="character-image-feed-empty" class="image-feed-empty">画像URLを入力するとここに表示します。</p>
-        </div>
-        <label class="toggle-field image-feed-toggle-row" for="image-feed-enabled-toggle">
-          <span>取得画像</span>
-          <input type="checkbox" id="image-feed-enabled-toggle">
-          <span id="image-feed-enabled-label">更新しない</span>
-          <button id="image-feed-analyze-button" class="image-feed-analyze-button" type="button">解析</button>
-        </label>
-        <label class="field-label image-feed-resize-row" for="image-feed-resize-select">
-          <span>画像リサイズ</span>
-          <select id="image-feed-resize-select">
-            <option value="1">リサイズなし</option>
-            <option value="0.5">縦横50%</option>
-            <option value="0.25">縦横25%</option>
-            <option value="0.15">縦横15%</option>
-          </select>
-        </label>
-        <label class="checkbox-field image-feed-fast-analysis-row" for="image-analysis-fast-toggle">
-          <input type="checkbox" id="image-analysis-fast-toggle">
-          <span>高速画像解析を使う (Ollama 11434)</span>
-        </label>
-        <label class="checkbox-field image-feed-raspberrypi-row" for="image-analysis-raspberrypi-toggle">
-          <input type="checkbox" id="image-analysis-raspberrypi-toggle">
-          <span>Raspberry Pi 5最適化を使う</span>
-        </label>
-        <div class="character-body">
           <label class="field-label" for="character-select">キャラクター</label>
           <select id="character-select"></select>
-          <div class="character-editor-toolbar">
-            <button id="create-character-button" class="secondary-button" type="button">新規登録</button>
-            <button id="asset-editor-toggle-button" class="secondary-button" type="button">素材登録</button>
-            <button id="delete-character-button" class="danger-button" type="button">このキャラを削除</button>
+        <details class="integration-panel agent-panel">
+          <summary class="integration-panel-summary">Agent機能</summary>
+          <label class="checkbox-field background-followup-toggle-row" for="background-followup-enabled-toggle">
+            <input type="checkbox" id="background-followup-enabled-toggle">
+            <span>自発話を有効にする</span>
+          </label>
+        </details>
+        <details class="integration-panel image-analysis-panel">
+          <summary class="integration-panel-summary">画像解析機能</summary>
+          <div id="character-image-feed-panel" class="image-feed-panel hidden">
+            <img id="character-image-feed-image" class="image-feed-image hidden" alt="取得画像プレビュー">
+            <p id="character-image-feed-empty" class="image-feed-empty">画像URLを入力するとここに表示します。</p>
           </div>
+          <label class="toggle-field image-feed-toggle-row" for="image-feed-enabled-toggle">
+            <span>取得画像</span>
+            <input type="checkbox" id="image-feed-enabled-toggle">
+            <span id="image-feed-enabled-label">更新しない</span>
+            <button id="image-feed-analyze-button" class="image-feed-analyze-button" type="button">解析</button>
+          </label>
+          <label class="field-label image-feed-resize-row" for="image-feed-resize-select">
+            <span>画像リサイズ</span>
+            <select id="image-feed-resize-select">
+              <option value="1">リサイズなし</option>
+              <option value="0.5">縦横50%</option>
+              <option value="0.25">縦横25%</option>
+              <option value="0.15">縦横15%</option>
+            </select>
+          </label>
+          <label class="checkbox-field image-feed-fast-analysis-row" for="image-analysis-fast-toggle">
+            <input type="checkbox" id="image-analysis-fast-toggle">
+            <span>高速画像解析を使う (Ollama 11434)</span>
+          </label>
+          <label class="checkbox-field image-feed-raspberrypi-row" for="image-analysis-raspberrypi-toggle">
+            <input type="checkbox" id="image-analysis-raspberrypi-toggle">
+            <span>Raspberry Pi 5最適化を使う</span>
+          </label>
+        </details>
+        <div class="character-body">
+          <details class="integration-panel character-management-panel">
+            <summary class="integration-panel-summary">キャラクタ登録削除</summary>
+            <div class="character-editor-toolbar">
+              <button id="create-character-button" class="secondary-button" type="button">新規登録</button>
+              <button id="asset-editor-toggle-button" class="secondary-button" type="button">素材登録</button>
+              <button id="delete-character-button" class="danger-button" type="button">このキャラを削除</button>
+            </div>
+          </details>
           <h2 id="character-name">-</h2>
           <p id="character-description" class="character-description"></p>
           <div class="editor-grid">

@@ -126,13 +126,18 @@ body {
   padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 6px;
 }
 
 .character-body {
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+}
+
+.background-followup-toggle-row {
+  margin: -4px 2px 0;
+  font-size: 0.82rem;
 }
 
 .layout.visual-expanded .character-panel {
@@ -257,14 +262,37 @@ body {
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .integration-panel {
-  margin-top: 16px;
+  margin-top: 0;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.4);
+}
+
+.integration-panel-summary {
+  cursor: pointer;
+  list-style: none;
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 400;
+}
+
+.integration-panel-summary::-webkit-details-marker {
+  display: none;
+}
+
+.integration-panel-summary::after {
+  content: "+";
+  float: right;
+  color: var(--muted);
+}
+
+.integration-panel[open] .integration-panel-summary::after {
+  content: "-";
 }
 
 .integration-panel-header {
@@ -279,6 +307,33 @@ body {
   margin: 0;
   font-size: 0.94rem;
   font-weight: 400;
+}
+
+.agent-panel:not([open]) {
+  padding-bottom: 14px;
+}
+
+.agent-panel[open] .background-followup-toggle-row {
+  margin-top: 12px;
+}
+
+.image-analysis-panel[open] .image-feed-panel {
+  margin-top: 12px;
+}
+
+.image-analysis-panel[open] .image-feed-toggle-row,
+.image-analysis-panel[open] .image-feed-resize-row,
+.image-analysis-panel[open] .image-feed-fast-analysis-row,
+.image-analysis-panel[open] .image-feed-raspberrypi-row {
+  margin-top: 12px;
+}
+
+.character-management-panel {
+  margin-bottom: 0;
+}
+
+.character-management-panel[open] .character-editor-toolbar {
+  margin-top: 12px;
 }
 
 .integration-actions {

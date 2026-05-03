@@ -25,9 +25,17 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 
+def emit_background_followup_log(message: str) -> None:
+    print(message, flush=True)
+
+
 def _utc_now_iso() -> str:
     # proposal や observation の生成時刻を一貫した UTC ISO 文字列で持つ。
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value)
 
 
 class ObservationKind(StrEnum):
@@ -83,6 +91,15 @@ ToolHandler = Callable[..., Awaitable[dict[str, Any]] | dict[str, Any]]
 ObserverCallback = Callable[[ConversationObservation], Awaitable[list[BackgroundProposal]]]
 
 
+@dataclass
+class IdleFollowupState:
+    last_user_activity_at: str | None = None
+    last_user_message: str | None = None
+    last_assistant_message: str | None = None
+    last_image_analysis_text: str | None = None
+    last_proposal_at: str | None = None
+
+
 class ToolWorker:
     # 外部 lookup や補助ツール実行の入口。
     # producer はツール名と引数だけを渡し、同期・非同期の違いはここで吸収する。
@@ -118,6 +135,85 @@ class ProposalProducer(ABC):
         tool_worker: ToolWorker,
     ) -> list[BackgroundProposal]:
         raise NotImplementedError
+
+
+class IdleFollowupProducer(ProposalProducer):
+    # 一定時間ユーザー入力や補助イベントが無いときに、自発話候補を 1 件だけ提案する。
+    def __init__(
+        self,
+        *,
+        idle_seconds: float = 45,
+        cooldown_seconds: float = 90,
+    ) -> None:
+        self.idle_seconds = idle_seconds
+        self.cooldown_seconds = cooldown_seconds
+        self._state_by_conversation: dict[str, IdleFollowupState] = {}
+
+    async def on_observation(
+        self,
+        observation: ConversationObservation,
+        *,
+        tool_worker: ToolWorker,
+    ) -> list[BackgroundProposal]:
+        del tool_worker
+        state = self._state_by_conversation.setdefault(observation.conversation_id, IdleFollowupState())
+
+        if observation.kind is ObservationKind.USER_MESSAGE:
+            state.last_user_activity_at = observation.created_at
+            state.last_user_message = str(observation.payload.get("text") or "").strip() or None
+            emit_background_followup_log(
+                f"[background-followup] observed user activity conversation_id={observation.conversation_id} at={observation.created_at}"
+            )
+            return []
+
+        if observation.kind is ObservationKind.ASSISTANT_MESSAGE:
+            state.last_assistant_message = str(observation.payload.get("text") or "").strip() or None
+            if observation.payload.get("source") == "background_agent":
+                state.last_proposal_at = observation.created_at
+                emit_background_followup_log(
+                    f"[background-followup] completed conversation_id={observation.conversation_id} at={observation.created_at} text={(state.last_assistant_message or '')[:80]!r}"
+                )
+            return []
+
+        if observation.kind is ObservationKind.VLM_EVENT:
+            state.last_image_analysis_text = str(observation.payload.get("text") or "").strip() or None
+            return []
+
+        if observation.kind is not ObservationKind.TIMER:
+            return []
+
+        if state.last_user_activity_at is None:
+            return []
+
+        now = _parse_iso_datetime(observation.created_at)
+        last_activity_at = _parse_iso_datetime(state.last_user_activity_at)
+        elapsed_seconds = (now - last_activity_at).total_seconds()
+        if elapsed_seconds < self.idle_seconds:
+            return []
+
+        if state.last_proposal_at is not None:
+            last_proposal_at = _parse_iso_datetime(state.last_proposal_at)
+            cooldown_elapsed_seconds = (now - last_proposal_at).total_seconds()
+            if cooldown_elapsed_seconds < self.cooldown_seconds:
+                return []
+
+        emit_background_followup_log(
+            f"[background-followup] proposal created conversation_id={observation.conversation_id} elapsed={elapsed_seconds:.1f}s at={observation.created_at}"
+        )
+        return [
+            BackgroundProposal(
+                conversation_id=observation.conversation_id,
+                kind=ProposalKind.FOLLOW_UP_MESSAGE,
+                summary="idle follow-up",
+                payload={
+                    "reason": "idle_timeout",
+                    "last_user_message": state.last_user_message,
+                    "last_assistant_message": state.last_assistant_message,
+                    "last_image_analysis_text": state.last_image_analysis_text,
+                },
+                priority=ProposalPriority.LOW,
+            )
+        ]
 
 
 class ConversationObserver:
