@@ -464,7 +464,7 @@ function bindEvents() {
 
   elements.imageFeedResizeSelect?.addEventListener("change", () => {
     const nextRatio = Number(elements.imageFeedResizeSelect.value);
-    state.imageFeedResizeRatio = nextRatio === 0.25 ? 0.25 : nextRatio === 0.5 ? 0.5 : 1;
+    state.imageFeedResizeRatio = nextRatio === 0.15 ? 0.15 : nextRatio === 0.25 ? 0.25 : nextRatio === 0.5 ? 0.5 : 1;
     if (state.imageFeedEnabled) {
       void refreshImageFeed(true);
     }
