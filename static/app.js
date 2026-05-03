@@ -1616,9 +1616,88 @@ function stopImageFeedCamera() {
   if (state.imageFeedVideoElement) {
     state.imageFeedVideoElement.pause();
     state.imageFeedVideoElement.srcObject = null;
+    state.imageFeedVideoElement.remove();
     state.imageFeedVideoElement = null;
   }
   state.imageFeedCanvasElement = null;
+}
+
+function createImageFeedVideoElement() {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.setAttribute("muted", "");
+  video.setAttribute("playsinline", "");
+  video.setAttribute("aria-hidden", "true");
+  video.tabIndex = -1;
+  Object.assign(video.style, {
+    position: "fixed",
+    width: "1px",
+    height: "1px",
+    right: "0",
+    bottom: "0",
+    opacity: "0",
+    pointerEvents: "none",
+    zIndex: "-1",
+  });
+  document.body.appendChild(video);
+  return video;
+}
+
+async function waitForImageFeedVideoReady(video, timeoutMs = 5000) {
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId = null;
+
+    const cleanup = () => {
+      video.removeEventListener("loadeddata", handleReady);
+      video.removeEventListener("canplay", handleReady);
+      video.removeEventListener("playing", handleReady);
+      video.removeEventListener("resize", handleReady);
+      video.removeEventListener("error", handleError);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+
+    const finish = (callback) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const handleReady = () => {
+      if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth <= 0 || video.videoHeight <= 0) {
+        return;
+      }
+      finish(resolve);
+    };
+
+    const handleError = () => {
+      finish(() => reject(new Error("カメラ映像を初期化できませんでした。")));
+    };
+
+    timeoutId = window.setTimeout(() => {
+      finish(() => reject(new Error("カメラ映像の準備がタイムアウトしました。")));
+    }, timeoutMs);
+
+    video.addEventListener("loadeddata", handleReady);
+    video.addEventListener("canplay", handleReady);
+    video.addEventListener("playing", handleReady);
+    video.addEventListener("resize", handleReady);
+    video.addEventListener("error", handleError, { once: true });
+
+    handleReady();
+  });
 }
 
 async function ensureImageFeedCamera() {
@@ -1639,24 +1718,15 @@ async function ensureImageFeedCamera() {
       video: true,
       audio: false,
     });
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.autoplay = true;
+    const video = createImageFeedVideoElement();
     video.srcObject = stream;
-    await new Promise((resolve, reject) => {
-      const handleLoadedMetadata = () => {
-        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-        resolve();
-      };
-      const handleError = () => {
-        video.removeEventListener("error", handleError);
-        reject(new Error("カメラ映像を初期化できませんでした。"));
-      };
-      video.addEventListener("loadedmetadata", handleLoadedMetadata);
-      video.addEventListener("error", handleError, { once: true });
-    });
-    await video.play();
+    const playPromise = video.play();
+    if (playPromise?.catch) {
+      playPromise.catch((error) => {
+        console.warn("image feed video play rejected", error);
+      });
+    }
+    await waitForImageFeedVideoReady(video);
 
     const canvas = document.createElement("canvas");
     state.imageFeedStream = stream;
