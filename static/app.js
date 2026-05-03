@@ -19,6 +19,7 @@ const state = {
   micLevelThreshold: 0.03,
   micAutoOffEnabled: true,
   imageFeedEnabled: false,
+  imageFeedResizeRatio: 1,
   imageFeedStatus: "idle",
   imageFeedCurrentUrl: "",
   imageFeedRequestPending: false,
@@ -127,6 +128,7 @@ const elements = {
   micAutoOffToggle: document.getElementById("mic-auto-off-toggle"),
   imageFeedEnabledToggle: document.getElementById("image-feed-enabled-toggle"),
   imageFeedEnabledLabel: document.getElementById("image-feed-enabled-label"),
+  imageFeedResizeSelect: document.getElementById("image-feed-resize-select"),
   imageFeedAnalyzeButton: document.getElementById("image-feed-analyze-button"),
   imageFeedAnalyzeIconButton: document.getElementById("image-feed-analyze-icon-button"),
   audioEnabledToggle: document.getElementById("audio-enabled-toggle"),
@@ -458,6 +460,15 @@ function bindEvents() {
     }
     syncImageFeedControls();
     syncImageFeedPanels();
+  });
+
+  elements.imageFeedResizeSelect?.addEventListener("change", () => {
+    const nextRatio = Number(elements.imageFeedResizeSelect.value);
+    state.imageFeedResizeRatio = nextRatio === 0.25 ? 0.25 : nextRatio === 0.5 ? 0.5 : 1;
+    if (state.imageFeedEnabled) {
+      void refreshImageFeed(true);
+    }
+    syncImageFeedControls();
   });
 
   elements.imageFeedAnalyzeButton?.addEventListener("click", () => {
@@ -1576,6 +1587,9 @@ function syncImageFeedControls() {
   if (elements.imageFeedEnabledLabel) {
     elements.imageFeedEnabledLabel.textContent = state.imageFeedEnabled ? "更新する" : "更新しない";
   }
+  if (elements.imageFeedResizeSelect) {
+    elements.imageFeedResizeSelect.value = String(state.imageFeedResizeRatio);
+  }
   if (elements.imageFeedAnalyzeButton) {
     elements.imageFeedAnalyzeButton.disabled = !(
       state.imageFeedEnabled &&
@@ -1809,8 +1823,11 @@ async function refreshImageFeed(force = false) {
 
   const video = state.imageFeedVideoElement;
   const canvas = state.imageFeedCanvasElement;
-  const width = video.videoWidth || 640;
-  const height = video.videoHeight || 480;
+  const sourceWidth = video.videoWidth || 640;
+  const sourceHeight = video.videoHeight || 480;
+  const resizeRatio = state.imageFeedResizeRatio;
+  const width = Math.max(1, Math.round(sourceWidth * resizeRatio));
+  const height = Math.max(1, Math.round(sourceHeight * resizeRatio));
   canvas.width = width;
   canvas.height = height;
 

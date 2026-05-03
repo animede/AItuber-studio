@@ -654,6 +654,14 @@ body {
   margin-top: -4px;
 }
 
+.image-feed-resize-row {
+  margin: 2px 4px 0;
+}
+
+.image-feed-resize-row select {
+  margin-top: 6px;
+}
+
 .image-feed-analysis {
   margin: 6px 4px 0;
   color: var(--muted);
