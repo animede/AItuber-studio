@@ -22,6 +22,7 @@ Windows と Linux の両方で動かす前提で、Python 側のパス処理は 
 - waiting 動画ベースの口パク試行を実装
 - YouTube Live コメント取得を `pytchat` ベースで試せます
 - マイク入力を無音検出で区切って LLM へ直接送信できます
+- Ollama 上の `moondream` を使った高速画像解析を切り替えできます
 
 現時点では、既存版の動作を引き継ぎつつ、会話主経路を少しずつ整理しながら検証できる構成にしています。
 
@@ -85,6 +86,7 @@ AItuber は、従来機能を維持しつつ、会話ターン処理の見通し
   - 会話生成だけでなく、role に書かれた日本語名のローマ字変換にも使います。
   - 長い assistant 応答を、後続会話向けの短い履歴要約へ圧縮する処理も持ちます。
   - 音声入力があるターンでは、最後の user 発話を OpenAI 互換の `input_audio` 形式へ差し替えて LLM へ渡します。
+  - 高速画像解析を使う場合は、Ollama 上の `moondream` へ英語の簡易視覚問い合わせを投げ、その結果を通常の会話モデルでキャラ口調の日本語へ整形します。
 
 - `app/conversation_store.py`
   - 会話データをメモリ上で管理します。
@@ -103,6 +105,7 @@ AItuber は、従来機能を維持しつつ、会話ターン処理の見通し
   - 接続先 URL、モデル名、履歴件数、ポートなどの設定を管理します。
   - assistant 要約の閾値既定値は 150 文字、要約文字数既定値は 100 文字です。
   - 既定待受ポートは `8005` です。
+  - 高速画像解析の既定値は `FAST_IMAGE_ANALYSIS_BASE_URL=http://127.0.0.1:11434`、`FAST_IMAGE_ANALYSIS_MODEL=moondream:latest` です。
 
 - `app/api_youtube.py`
   - YouTube Live コメント取得の開始、停止、新着取得 API を定義します。
@@ -138,6 +141,7 @@ AItuber は、従来機能を維持しつつ、会話ターン処理の見通し
   - ユーザー送信から最初の `delta` 到達までの時間を計測し、フッタに表示します。
   - waiting lipsync があるキャラでは、音声再生中も waiting 動画を維持しつつ mouth sprite を重ねます。
   - YouTube コメント取得が有効なときは、新着コメントを定期取得し、既存の user 入力として会話へ流し込みます。
+  - 画像取得を有効にしているときは、リサイズ後のカメラ画像を送れます。さらに「高速画像解析」を ON にすると Ollama の `moondream` を使う経路へ切り替わります。
 
 ### アセット
 
@@ -179,6 +183,8 @@ AItuber は、従来機能を維持しつつ、会話ターン処理の見通し
 AItuber でも基本仕様は従来版と同じで、waiting lipsync 素材があるキャラでは `talking` 動画へ切り替えず、音声イベントを基準に waiting 動画上で口パクを重ねます。
 
 TTS区切りを ON にすると、句点ベースだけでなく読点などでも短く区切って TTS へ渡します。
+
+画像取得を ON にした状態では、カメラ画像を会話入力とは別に解析できます。左カラムの「高速画像解析」を ON にすると、画像理解だけを Ollama の `moondream` へ投げ、返ってきた英語の観察メモを通常の会話モデルで日本語かつ選択キャラの口調へ整形します。
 
 また、初回の `delta` を受け取るまでの時間をフロントで計測し、画面下部の「初回文字」に表示します。
 
@@ -223,6 +229,7 @@ AItuber を動かすには、少なくとも次の 3 つが必要です。
 
 - Python 3.10 以上
 - `llama.cpp` の OpenAI 互換 API サーバ
+- 高速画像解析を使う場合は Ollama と `moondream` モデル
 - Aivis / VOICEVOX 互換 TTS を使う場合は AivisSpeech Engine
 
 Python 環境は、リポジトリルートで仮想環境を作ってから `requirements.txt` を入れます。
@@ -257,6 +264,38 @@ llama-server -hf unsloth/gemma-4-E4B-it-GGUF:Q4_K_M --reasoning off --host 0.0.0
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/models
+```
+
+## Ollama と moondream の起動
+
+高速画像解析を使う場合は、別ターミナルで Ollama を起動し、`moondream` を取得しておきます。既定接続先は `http://127.0.0.1:11434` です。
+
+モデル取得:
+
+```bash
+ollama pull moondream
+```
+
+起動確認:
+
+```bash
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+既定では `moondream:latest` を使います。別モデル名や別ホストを使いたい場合は、Web アプリ起動前に次を上書きします。
+
+Linux / macOS:
+
+```bash
+export FAST_IMAGE_ANALYSIS_BASE_URL=http://127.0.0.1:11434
+export FAST_IMAGE_ANALYSIS_MODEL=moondream:latest
+```
+
+Windows PowerShell:
+
+```powershell
+$env:FAST_IMAGE_ANALYSIS_BASE_URL = "http://127.0.0.1:11434"
+$env:FAST_IMAGE_ANALYSIS_MODEL = "moondream:latest"
 ```
 
 ## AivisSpeech Engine の起動
@@ -387,6 +426,13 @@ curl -s http://127.0.0.1:8005/api/health
 4. 必要なら「履歴件数」「要約開始文字数」「要約文字数」を調整します。
 5. 入力欄にメッセージを入れて「送信」します。
 
+画像解析を使う場合:
+
+1. 左側の「取得画像」を ON にします。
+2. 必要なら「画像リサイズ」で送信サイズを選びます。
+3. 高速化したい場合は「高速画像解析」を ON にします。
+4. 画像解析ボタンを押します。
+
 送信後の画面挙動:
 
 - assistant の返答は WebSocket でストリーミング表示されます
@@ -395,6 +441,7 @@ curl -s http://127.0.0.1:8005/api/health
 - waiting lipsync 素材があるキャラでは `talking.mp4` へ切り替えず、`waiting.mp4` 上に口パクを重ねます
 - 画面下部の「初回文字」に、送信から最初の返答文字までの時間が表示されます
 - 長い assistant 応答では、設定に応じて履歴用要約がバックエンドで生成されます
+- 高速画像解析が ON のときは、画像理解だけを Ollama `moondream` が担当し、最終的な話し方は通常の会話モデルとキャラクター設定が担当します
 
 ## 補足
 
