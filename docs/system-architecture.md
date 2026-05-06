@@ -222,13 +222,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[user発話 or timer tick] --> B[BackgroundAgentManager.observe]
-    B --> C[IdleFollowupProducer]
-    C -->|一定時間無発話| D[BackgroundProposal生成]
-    D --> E[api_chat.py が proposal を回収]
-    E --> F[generate_idle_followup()]
-    F --> G[通常assistant応答と同じ形式で送信]
-    G --> H[conversation_store へ保存]
+  A[ユーザー発話またはタイマー tick] --> B[BackgroundAgentManager で観測]
+  B --> C[IdleFollowupProducer が判定]
+  C -->|一定時間ユーザー発話なし| D[自発話 proposal を生成]
+  D --> E[api_chat が proposal を回収]
+  E --> F[LLM で自発話文を生成]
+  F --> G[通常の assistant 応答と同じ形式で送信]
+  G --> H[ConversationStore に保存]
 ```
 
 ポイントは、background agent が直接 UI へ書き込まず、まず proposal を返す構造になっている点です。
