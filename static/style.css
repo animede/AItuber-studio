@@ -129,10 +129,27 @@ body {
   gap: 6px;
 }
 
-.character-body {
+.character-settings-shell {
+  min-height: 0;
+  flex: 1;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.character-settings-scroll {
   min-height: 0;
   overflow: auto;
-  padding-right: 4px;
+  height: 100%;
+  padding-right: 16px;
+  scrollbar-gutter: stable;
+}
+
+.character-body {
+  min-height: 0;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .background-followup-toggle-row {
@@ -428,6 +445,7 @@ body {
   flex-wrap: nowrap;
   align-items: flex-start;
   gap: 12px;
+  margin-bottom: 8px;
 }
 
 .editor-toggle-primary,
@@ -687,7 +705,7 @@ body {
 }
 
 .panel-actions {
-  margin-top: auto;
+  margin-top: 18px;
   display: grid;
   gap: 10px;
 }
