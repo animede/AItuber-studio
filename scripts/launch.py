@@ -70,30 +70,49 @@ def load_local_env() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-# アプリと同じ設定を見るため、launch.env を読んでから app.settings を読み込む。
-load_local_env()
-sys.path.insert(0, str(BASE_DIR))
-from app import settings  # noqa: E402
-
-APP_URL = f"http://127.0.0.1:{settings.APP_PORT}/"
-
-_llm = urlsplit(settings.LLM_BASE_URL)
-LLM_HOST = _llm.hostname or "127.0.0.1"
-LLM_PORT = _llm.port or 80
-LLM_ROOT = settings.LLM_BASE_URL.rstrip("/").removesuffix("/v1")
-LLM_IS_LOCAL = LLM_HOST in LOCAL_HOSTS
-
-_tts = urlsplit(settings.TTS_URL)
-TTS_HOST = _tts.hostname or "127.0.0.1"
-TTS_PORT = _tts.port or 80
-
-LLM_MODEL = settings.LLM_MODEL
-LLM_CTX = os.getenv("LLM_CTX", "16384")
-
-STARTUP_TIMEOUT_SECONDS = float(os.getenv("STARTUP_TIMEOUT_SECONDS", "600"))
+settings = None
+APP_URL = ""
+LLM_HOST = "127.0.0.1"
+LLM_PORT = 8080
+LLM_ROOT = ""
+LLM_IS_LOCAL = True
+TTS_HOST = "127.0.0.1"
+TTS_PORT = 10101
+LLM_MODEL = ""
+LLM_CTX = "16384"
+STARTUP_TIMEOUT_SECONDS = 600.0
 DOWNLOAD_TIMEOUT_SECONDS = 6 * 60 * 60
 
 _job_handle = None
+
+
+def configure_environment() -> None:
+    """launch.env を読んだあと、アプリと同じ起動設定を決める。"""
+    global settings, APP_URL, LLM_HOST, LLM_PORT, LLM_ROOT, LLM_IS_LOCAL
+    global TTS_HOST, TTS_PORT, LLM_MODEL, LLM_CTX, STARTUP_TIMEOUT_SECONDS
+
+    load_local_env()
+    sys.path.insert(0, str(BASE_DIR))
+    from app import settings as app_settings
+
+    settings = app_settings
+    APP_URL = f"http://127.0.0.1:{settings.APP_PORT}/"
+
+    llm = urlsplit(settings.LLM_BASE_URL)
+    LLM_HOST = llm.hostname or "127.0.0.1"
+    LLM_PORT = llm.port or (443 if llm.scheme == "https" else 80)
+    LLM_ROOT = settings.LLM_BASE_URL.rstrip("/").removesuffix("/v1")
+    LLM_IS_LOCAL = LLM_HOST in LOCAL_HOSTS
+
+    tts = urlsplit(settings.TTS_URL)
+    TTS_HOST = tts.hostname or "127.0.0.1"
+    TTS_PORT = tts.port or (443 if tts.scheme == "https" else 80)
+
+    LLM_MODEL = settings.LLM_MODEL
+    LLM_CTX = os.getenv("LLM_CTX", "16384")
+    STARTUP_TIMEOUT_SECONDS = float(os.getenv("STARTUP_TIMEOUT_SECONDS", "600"))
+    if STARTUP_TIMEOUT_SECONDS <= 0:
+        raise ValueError("STARTUP_TIMEOUT_SECONDS は 0 より大きい数で指定してください")
 
 
 def log(message: str = "") -> None:
@@ -107,6 +126,23 @@ def port_is_open(port: int, host: str = "127.0.0.1") -> bool:
         with socket.create_connection((host, port), timeout=0.5):
             return True
     except OSError:
+        return False
+
+
+def app_ready() -> bool:
+    """待ち受けているのが AITuber Studio か、固有 API の応答で確認する。"""
+    try:
+        with urllib.request.urlopen(f"{APP_URL}api/health", timeout=5) as response:
+            if response.status != 200:
+                return False
+            health = json.loads(response.read().decode("utf-8"))
+        return (
+            isinstance(health, dict)
+            and health.get("status") == "ok"
+            and "configured_model" in health
+            and "default_character_id" in health
+        )
+    except (OSError, ValueError):
         return False
 
 
@@ -340,16 +376,17 @@ def start_app() -> subprocess.Popen:
     )
 
 
-def wait_for_port(port: int, label: str, process: subprocess.Popen, timeout: float, host: str = "127.0.0.1") -> bool:
+def wait_for_app(process: subprocess.Popen, timeout: float) -> bool:
+    """AITuber Studio の固有 API が応答するまで待つ。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if port_is_open(port, host):
+        if app_ready():
             return True
         if process.poll() is not None:
-            log(f"[{label}] 起動に失敗しました (終了コード {process.returncode})。")
+            log(f"[APP] 起動に失敗しました (終了コード {process.returncode})。")
             return False
         time.sleep(1.0)
-    log(f"[{label}] {timeout:.0f} 秒以内に {port} が開きませんでした。")
+    log(f"[APP] {timeout:.0f} 秒以内に起動が終わりませんでした。")
     return False
 
 
@@ -415,10 +452,15 @@ def create_desktop_shortcut() -> int:
 
 
 def run() -> int:
-    if port_is_open(settings.APP_PORT):
+    if app_ready():
         log(f"{settings.APP_PORT} は既に待受中です。ブラウザで {APP_URL} を開きます。")
         webbrowser.open(APP_URL)
         return 0
+    if port_is_open(settings.APP_PORT):
+        return pause_and_fail(
+            f"{settings.APP_PORT} は AITuber Studio 以外のプログラムが使っています。\n"
+            "launch.env の APP_PORT を別の番号に変更してください。"
+        )
 
     LOG_DIR.mkdir(exist_ok=True)
     if sys.platform == "win32":
@@ -440,7 +482,10 @@ def run() -> int:
             log(f"[LLM]   {settings.LLM_BASE_URL} の llama-server を使います (起動済み)。")
             if not llm_ready():
                 log("[LLM]   モデルの読み込み中です。終わるまで待ちます...")
-                wait_for_llm(None, STARTUP_TIMEOUT_SECONDS)
+                if not wait_for_llm(None, STARTUP_TIMEOUT_SECONDS):
+                    return pause_and_fail(
+                        f"{settings.LLM_BASE_URL} の LLM が準備完了になりませんでした。"
+                    )
             if llm_accepts_audio() is False:
                 log("[LLM]   ただし mmproj なしで起動されているため、マイク入力と画像入力は使えません。")
         elif not LLM_IS_LOCAL:
@@ -459,7 +504,7 @@ def run() -> int:
 
         app_process = start_app()
         owned.append(app_process)
-        if not wait_for_port(settings.APP_PORT, "APP", app_process, STARTUP_TIMEOUT_SECONDS):
+        if not wait_for_app(app_process, STARTUP_TIMEOUT_SECONDS):
             return pause_and_fail(f"詳細は {LOG_DIR / 'app.log'} を確認してください。")
 
         log()
@@ -509,6 +554,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.shortcut:
         return create_desktop_shortcut()
+    configure_environment()
     return run()
 
 
