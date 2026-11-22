@@ -51,6 +51,9 @@ AItuber は、従来機能を維持しつつ、会話ターン処理の見通し
   - FastAPI アプリの起動入口です。
   - `app/` 配下の API ルータを登録し、`static` ディレクトリを配信します。
 
+- `scripts/launch.py`
+  - LLM サーバの起動、Web アプリの起動、ブラウザ表示をまとめて行うランチャーです(「ランチャーでまとめて起動する」を参照)。
+
 - `app/api_chat.py`
   - 会話関連 API を定義します。
   - 会話作成、会話取得、会話クリア、WebSocket 会話の入口を担当します。
@@ -438,6 +441,41 @@ python webapp_main.py
 
 ```bash
 curl -s http://127.0.0.1:8005/api/health
+```
+
+## ランチャーでまとめて起動する
+
+`scripts/launch.py` を使うと、LLM サーバ(`llama-server`)の起動、Web アプリの起動、ブラウザで開くところまでを 1 つの窓でまとめて行えます。ここまでに書いた起動方法はそのまま使えます。AivisSpeech Engine と Ollama は従来どおり別に起動しておきます。
+
+Windows PowerShell / コマンドプロンプト:
+
+```bat
+.\.venv\Scripts\python.exe scripts\launch.py
+```
+
+Linux / macOS:
+
+```bash
+.venv/bin/python scripts/launch.py
+```
+
+- `llama-server` が `LLM_BASE_URL`(既定 `http://127.0.0.1:8080/v1`)ですでに動いていれば、それを使います。動いていなければ自分で起動します
+- モデルは `LLM_MODEL`(既定 `unsloth/gemma-4-E4B-it-GGUF:Q4_K_M`)です。Hugging Face のキャッシュにあればそれを読み込み、無ければ `-hf` で取得します。マイク入力と画像入力に必要な mmproj も一緒に読み込みます
+- コンテキスト長は `LLM_CTX`(既定 `16384`)です。指定しないとモデル最大の 131072 になり、KV キャッシュだけで 2GB 以上使います
+- 窓を閉じると、ランチャーが起動したものだけが止まります。Windows では強制終了しても `llama-server` が残りません
+- ログは `logs/llm.log` と `logs/app.log` に出ます
+
+Windows では、デスクトップに起動用のアイコンを作れます。
+
+```bat
+.\.venv\Scripts\python.exe scripts\launch.py --shortcut
+```
+
+アイコンから起動すると環境変数を渡しにくいので、リポジトリルートの `launch.env`(git 管理外)に `KEY=VALUE` の形で 1 行に 1 つずつ書いておくこともできます。
+
+```text
+TTS_ENABLED=true
+LLM_CTX=32768
 ```
 
 ## 操作方法
